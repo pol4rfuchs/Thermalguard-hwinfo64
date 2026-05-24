@@ -1,128 +1,128 @@
 # HWiNFO Thermal Guard v1.4
 
-Automatischer thermischer Schutz für Windows-Gaming-PCs.  
-Überwacht CPU- und GPU-Sensoren in Echtzeit via HWiNFO + RemoteHWInfo und reagiert bei kritischen Temperaturen in drei Eskalationsstufen: **Warnung → Programme beenden → Notabschaltung.**
+Automatic thermal protection for Windows gaming PCs.  
+Monitors CPU and GPU sensors in real time via HWiNFO + RemoteHWInfo and responds to critical temperatures with a three-stage escalation: **Warning → Kill Processes → Emergency Shutdown.**
 
 ---
 
-## Schnellstart (frischer PC, nix installiert)
+## Quick Start (fresh PC, nothing installed)
 
-1. Ordner `C:\Tools\HWiNFO-ThermalGuard\` anlegen
-2. Alle Dateien reinkopieren:
+1. Create the folder `C:\Tools\HWiNFO-ThermalGuard\`
+2. Copy all files into it:
    - `HWiNFO-ThermalGuard.ps1`
    - `Start-HWiNFO-Remote.bat`
    - `Start-HWiNFO-Remote.vbs`
-3. `HWiNFO-ThermalGuard.ps1` öffnen → die ersten Zeilen anpassen:
+3. Open `HWiNFO-ThermalGuard.ps1` → adjust the first few lines:
 
 ```powershell
-$GPUProfile = "AUTO"      # erkennt GPU automatisch (oder "NVIDIA" / "AMD")
-$EnableNtfy = $false      # kein ntfy-Server? → false
+$GPUProfile = "AUTO"      # auto-detects GPU (or set to "NVIDIA" / "AMD")
+$EnableNtfy = $false      # no ntfy server? → false
 ```
 
-4. `Start-HWiNFO-Remote.bat` per Rechtsklick → **Als Administrator ausführen**
-5. Fertig — alles was fehlt wird automatisch installiert
+4. Right-click `Start-HWiNFO-Remote.bat` → **Run as Administrator**
+5. Done — everything missing will be installed automatically
 
 ---
 
-## Was wird automatisch installiert?
+## What Gets Installed Automatically?
 
-| Dependency | Methode | Ziel |
+| Dependency | Method | Destination |
 |---|---|---|
-| **HWiNFO64** | `winget install` (silent) | Standard-Installationspfad |
-| **RemoteHWInfo** | GitHub ZIP-Download + Entpacken | `C:\Tools\RemoteHWInfo\` |
-| **BurntToast** | `Install-Module` (PowerShell) | PS-Modulpfad |
+| **HWiNFO64** | `winget install` (silent) | Default installation path |
+| **RemoteHWInfo** | GitHub ZIP download + extract | `C:\Tools\RemoteHWInfo\` |
+| **BurntToast** | `Install-Module` (PowerShell) | PS module path |
 
-Die automatische Installation greift **nur** wenn die Software nicht gefunden wird. Ist sie bereits installiert (egal wo), wird der vorhandene Pfad verwendet.
+Auto-install only triggers if the software is **not already found**. If it's already installed (anywhere), the existing path is used.
 
-Falls winget bei HWiNFO fehlschlägt (z.B. Windows Update Service deaktiviert), erscheint im Log ein Download-Link für die manuelle Installation.
+If winget fails for HWiNFO (e.g. Windows Update Service is disabled), the log will show a manual download link.
 
 ---
 
-## Dateistruktur
+## File Structure
 
 ```
 C:\Tools\HWiNFO-ThermalGuard\
-├── HWiNFO-ThermalGuard.ps1      ← Hauptscript
-├── Start-HWiNFO-Remote.bat      ← Autostart-Kette
-├── Start-HWiNFO-Remote.vbs      ← Unsichtbar-Wrapper
-└── README.md                    ← Diese Dokumentation
+├── HWiNFO-ThermalGuard.ps1      ← Main script
+├── Start-HWiNFO-Remote.bat      ← Autostart chain
+├── Start-HWiNFO-Remote.vbs      ← Invisible wrapper
+└── README.md                    ← This documentation
 ```
 
 ---
 
-## Setup im Detail
+## Setup in Detail
 
-### GPU-Profil
+### GPU Profile
 
 ```powershell
-$GPUProfile = "AUTO"      # Erkennt automatisch NVIDIA oder AMD (Standard)
-$GPUProfile = "NVIDIA"    # Manueller Override: RTX 5070 Ti, RTX 4090, etc.
-$GPUProfile = "AMD"       # Manueller Override: RX 9070 XT, RX 6800 XT, etc.
+$GPUProfile = "AUTO"      # Auto-detects NVIDIA or AMD (default)
+$GPUProfile = "NVIDIA"    # Manual override: RTX 5070 Ti, RTX 4090, etc.
+$GPUProfile = "AMD"       # Manual override: RX 9070 XT, RX 6800 XT, etc.
 ```
 
-Bei `AUTO` erkennt das Script die GPU automatisch über zwei Methoden:
+With `AUTO`, the script detects the GPU via two methods:
 
-1. **Windows WMI** (`Win32_VideoController`) — funktioniert immer, auch ohne HWiNFO
-2. **HWiNFO JSON** (Fallback) — liest den GPU-Namen aus den Sensor-Daten
+1. **Windows WMI** (`Win32_VideoController`) — always works, even without HWiNFO
+2. **HWiNFO JSON** (fallback) — reads GPU name from sensor data
 
-Die Profile setzen automatisch die richtigen Sensor-Labels:
+Profiles automatically set the correct sensor labels:
 
 | | NVIDIA | AMD |
 |---|---|---|
 | GPU Temp | `GPU Temperature` | `GPU Temperature` |
-| GPU Hotspot | Nicht verfügbar | `GPU Hot Spot Temperature` |
+| GPU Hotspot | Not available | `GPU Hot Spot Temperature` |
 | GPU Fan | `GPU Fan1` | `GPU Fan` |
 | GPU Load | `GPU Core Load` | `GPU Utilization` |
 
 ### Toggles
 
 ```powershell
-$EnableCPU  = $true     # CPU-Temperatur überwachen
-$EnableGPU  = $true     # GPU-Temperatur überwachen
-$EnableNtfy = $true     # Push-Benachrichtigungen via ntfy
+$EnableCPU  = $true     # Monitor CPU temperature
+$EnableGPU  = $true     # Monitor GPU temperature
+$EnableNtfy = $true     # Push notifications via ntfy
 ```
 
-### ntfy einrichten
+### Setting Up ntfy
 
-**Eigener Server:**
+**Own server:**
 ```powershell
 $EnableNtfy = $true
 $NTFY_URL   = "https://ntfy.example.com"
 $NTFY_TOPIC = "thermalguard"
 ```
 
-**Kein eigener Server? Kostenlos über ntfy.sh:**
+**No own server? Use ntfy.sh for free:**
 ```powershell
 $EnableNtfy = $true
 $NTFY_URL   = "https://ntfy.sh"
-$NTFY_TOPIC = "thermalguard-deinname"    # beliebiger Name, muss nur einzigartig sein
+$NTFY_TOPIC = "thermalguard-yourname"    # any name, just needs to be unique
 ```
 
-Dann die ntfy-App installieren (Android/iOS), Topic subscriben, fertig.
+Then install the ntfy app (Android/iOS), subscribe to the topic, done.
 
-**Kein ntfy gewünscht:**
+**Don't want ntfy at all:**
 ```powershell
 $EnableNtfy = $false
 ```
 
-Windows Toast-Benachrichtigungen laufen immer, unabhängig von ntfy.
+Windows Toast notifications always run, independent of ntfy.
 
-### Schwellwerte
+### Thresholds
 
 ```powershell
-$CPU_WarnTemp    = 85     # CPU Vorwarnung ab hier
-$CPU_CritTemp    = 91     # CPU Hard-Stop ab hier
-$GPU_WarnTemp    = 83     # GPU Vorwarnung
-$GPU_CritTemp    = 90     # GPU Hard-Stop
-$GPU_HotspotWarn = 95     # GPU Hotspot Vorwarnung (nur AMD)
-$GPU_HotspotCrit = 100    # GPU Hotspot Hard-Stop (nur AMD)
-$GPU_FanWarnRPM  = 300    # Fan-Warnung unter diesem Wert bei Last
-$GPU_FanCritRPM  = 0      # Fan Hard-Stop: 0 RPM bei Last
+$CPU_WarnTemp    = 85     # CPU early warning above this
+$CPU_CritTemp    = 91     # CPU hard stop above this
+$GPU_WarnTemp    = 83     # GPU early warning
+$GPU_CritTemp    = 90     # GPU hard stop
+$GPU_HotspotWarn = 95     # GPU hotspot warning (AMD only)
+$GPU_HotspotCrit = 100    # GPU hotspot hard stop (AMD only)
+$GPU_FanWarnRPM  = 300    # Fan warning below this RPM under load
+$GPU_FanCritRPM  = 0      # Fan hard stop: 0 RPM under load
 ```
 
-**Richtwerte:**
+**Reference values:**
 
-| Komponente | Konservativ | Standard | Aggressiv |
+| Component | Conservative | Standard | Aggressive |
 |---|---|---|---|
 | CPU Warn | 80°C | 85°C | 88°C |
 | CPU Crit | 88°C | 91°C | 95°C |
@@ -134,12 +134,12 @@ $GPU_FanCritRPM  = 0      # Fan Hard-Stop: 0 RPM bei Last
 ### Timing
 
 ```powershell
-$PollInterval = 5     # Sekunden zwischen Abfragen
-$Stage2Delay  = 30    # Sekunden bis Programme beendet werden
-$Stage3Delay  = 90    # Sekunden bis Shutdown (gesamt ab Trigger)
+$PollInterval = 5     # Seconds between polls
+$Stage2Delay  = 30    # Seconds until processes are killed
+$Stage3Delay  = 90    # Seconds until shutdown (total from trigger)
 ```
 
-### Prozessliste (Stufe 2)
+### Kill List (Stage 2)
 
 ```powershell
 $KillProcesses = @(
@@ -152,53 +152,53 @@ $KillProcesses = @(
 )
 ```
 
-Prozessnamen findest du im Task-Manager unter "Details" oder via:
+Find process names in Task Manager under "Details" or via:
 ```powershell
 Get-Process | Where-Object { $_.MainWindowTitle -ne "" }
 ```
 
-### Pfade (optional)
+### Paths (Optional)
 
-Normalerweise nicht nötig — das Script scannt automatisch. Nur setzen wenn die Software an einem ungewöhnlichen Ort liegt:
+Normally not needed — the script scans automatically. Only set these if the software is in an unusual location:
 
 ```powershell
-$HWiNFO_Path       = ""    # leer = auto-scan
-$RemoteHWInfo_Path  = ""    # leer = auto-scan
+$HWiNFO_Path       = ""    # empty = auto-scan
+$RemoteHWInfo_Path  = ""    # empty = auto-scan
 ```
 
 ---
 
-## Autostart einrichten
+## Setting Up Autostart
 
-### Methode 1: shell:startup (empfohlen)
+### Method 1: shell:startup (recommended)
 
-1. `.bat` und `.vbs` im **gleichen Ordner** (z.B. `C:\Tools\HWiNFO-ThermalGuard\`)
+1. Place `.bat` and `.vbs` in the **same folder** (e.g. `C:\Tools\HWiNFO-ThermalGuard\`)
 2. `Win+R` → `shell:startup` → Enter
-3. Rechtsklick auf `.vbs` → **Verknüpfung erstellen** → Verknüpfung in den startup-Ordner verschieben
+3. Right-click the `.vbs` → **Create shortcut** → move the shortcut into the startup folder
 
-### Was beim Start passiert
+### What Happens at Startup
 
 ```
-Start-HWiNFO-Remote.vbs (unsichtbar)
+Start-HWiNFO-Remote.vbs (invisible)
     └── Start-HWiNFO-Remote.bat
-            ├── PowerShell 7 oder 5.1 erkennen
-            ├── Shared Memory per Registry aktivieren
-            ├── -Resolve: Pfade scannen + fehlende Software downloaden
-            ├── HWiNFO64 starten (oder überspringen wenn läuft)
-            ├── 15s warten auf Sensor-Initialisierung
-            ├── RemoteHWInfo starten (oder überspringen wenn läuft)
-            ├── HTTP-Endpoint prüfen
-            └── ThermalGuard starten (oder überspringen wenn läuft)
+            ├── Detect PowerShell 7 or 5.1
+            ├── Enable Shared Memory via Registry
+            ├── -Resolve: scan paths + download missing software
+            ├── Start HWiNFO64 (or skip if already running)
+            ├── Wait 15s for sensor initialization
+            ├── Start RemoteHWInfo (or skip if already running)
+            ├── Check HTTP endpoint
+            └── Start ThermalGuard (or skip if already running)
 ```
 
-Alle Prozesse haben Duplikat-Schutz. Die `.bat` kann beliebig oft ausgeführt werden — was schon läuft wird übersprungen.
+All processes have duplicate protection. The `.bat` can be run any number of times — anything already running is skipped.
 
 ---
 
-## Pfad-Scan Reihenfolge
+## Path Scan Order
 
 ### HWiNFO64
-1. Manueller Override (`$HWiNFO_Path`)
+1. Manual override (`$HWiNFO_Path`)
 2. `C:\Program Files\HWiNFO64\`
 3. `C:\Program Files (x86)\HWiNFO64\`
 4. `C:\Tools\HWiNFO64\`
@@ -206,54 +206,54 @@ Alle Prozesse haben Duplikat-Schutz. Die `.bat` kann beliebig oft ausgeführt we
 6. Desktop
 7. Downloads
 8. System PATH
-9. Auto-Install via `winget install REALiX.HWiNFO`
+9. Auto-install via `winget install REALiX.HWiNFO`
 
 ### RemoteHWInfo
-1. Manueller Override (`$RemoteHWInfo_Path`)
+1. Manual override (`$RemoteHWInfo_Path`)
 2. `C:\Tools\RemoteHWInfo\`
 3. `C:\Tools\`
 4. Desktop
 5. Downloads
-6. Script-Ordner (Unterordner)
-7. Script-Ordner
-8. Auto-Download von GitHub → `C:\Tools\RemoteHWInfo\`
+6. Script folder (subdirectory)
+7. Script folder
+8. Auto-download from GitHub → `C:\Tools\RemoteHWInfo\`
 
 ---
 
-## 3-Stufen-Eskalation
+## 3-Stage Escalation
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                                                                     │
-│  t=0s     Kritische Schwelle erreicht                               │
+│  t=0s     Critical threshold reached                                │
 │           ├── Windows Toast (BurntToast)                            │
-│           ├── ntfy Push (wenn aktiviert)                            │
-│           └── Timer startet                                         │
+│           ├── ntfy push (if enabled)                                │
+│           └── Timer starts                                          │
 │                                                                     │
-│  t=0-30s  Polling alle 5 Sekunden                                   │
-│           └── Wert fällt unter Schwelle? → Timer Reset              │
+│  t=0-30s  Polling every 5 seconds                                   │
+│           └── Value drops below threshold? → Timer reset            │
 │                                                                     │
-│  t=30s    STUFE 2 — Programme beenden                               │
-│           ├── taskkill auf Prozessliste                              │
-│           └── Alert: "Programme beendet"                            │
+│  t=30s    STAGE 2 — Kill processes                                  │
+│           ├── taskkill on process list                               │
+│           └── Alert: "Processes killed"                             │
 │                                                                     │
-│  t=30-90s Polling weiter                                            │
-│           └── Wert fällt unter Schwelle? → Timer Reset              │
+│  t=30-90s Polling continues                                         │
+│           └── Value drops below threshold? → Timer reset            │
 │                                                                     │
-│  t=90s    STUFE 3 — Notabschaltung                                  │
-│           ├── Alert: "NOTABSCHALTUNG"                               │
-│           ├── 2s warten (damit ntfy noch rausgeht)                  │
+│  t=90s    STAGE 3 — Emergency shutdown                              │
+│           ├── Alert: "EMERGENCY SHUTDOWN"                           │
+│           ├── Wait 2s (to let ntfy send)                            │
 │           └── shutdown.exe /s /f /t 0                               │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### Timer-Logik
+### Timer Logic
 
-- Jeder Sensor hat einen eigenen Timer
-- Reset wenn Wert unter Schwelle fällt
-- Warn-Reset mit Hysterese (erst bei 95% der Warn-Schwelle)
-- GPU-Fan nur unter Last bewertet (Semi-Passiv-Modus bei Idle ist normal)
+- Each sensor has its own independent timer
+- Resets when the value drops below the threshold
+- Warning reset uses hysteresis (only resets at 95% of the warning threshold)
+- GPU fan is only evaluated under load (semi-passive mode at idle is normal)
 
 ---
 
@@ -263,61 +263,61 @@ Alle Prozesse haben Duplikat-Schutz. Die `.bat` kann beliebig oft ausgeführt we
 %USERPROFILE%\HWiNFO-ThermalGuard\thermalguard.log
 ```
 
-Beispiel:
+Example:
 ```
-[2026-05-18 14:23:01] [INFO] HWiNFO Thermal Guard v1.3 gestartet
+[2026-05-18 14:23:01] [INFO] HWiNFO Thermal Guard v1.3 started
 [2026-05-18 14:23:01] [INFO] PowerShell: 7.6.1 (Core)
-[2026-05-18 14:23:01] [INFO] GPU-Profil: NVIDIA
-[2026-05-18 14:23:02] [OK]   HWiNFO64 Gefunden: C:\Program Files\HWiNFO64\HWiNFO64.exe
-[2026-05-18 14:23:03] [OK]   RemoteHWInfo Gefunden: C:\Tools\RemoteHWInfo\RemoteHWInfo.exe
-[2026-05-18 14:23:04] [OK]   HTTP-Endpoint: 263 Readings
-[2026-05-18 15:41:22] [WARN] GPU Temperature VORWARNUNG: 84 Grad
-[2026-05-18 15:42:05] [CRIT] GPU Temperature KRITISCH: 91 — Timer gestartet
+[2026-05-18 14:23:01] [INFO] GPU profile: NVIDIA
+[2026-05-18 14:23:02] [OK]   HWiNFO64 found: C:\Program Files\HWiNFO64\HWiNFO64.exe
+[2026-05-18 14:23:03] [OK]   RemoteHWInfo found: C:\Tools\RemoteHWInfo\RemoteHWInfo.exe
+[2026-05-18 14:23:04] [OK]   HTTP endpoint: 263 readings
+[2026-05-18 15:41:22] [WARN] GPU Temperature WARNING: 84°C
+[2026-05-18 15:42:05] [CRIT] GPU Temperature CRITICAL: 91°C — timer started
 ```
 
-Rotation bei 10 MB.
+Rotates at 10 MB.
 
 ---
 
-## Dienste prüfen
+## Checking Services
 
-PowerShell-Einzeiler (Status aller Dienste):
+PowerShell one-liner (status of all services):
 
 ```powershell
-"HWiNFO64: $(if(Get-Process HWiNFO64 -EA 0){'[OK]'}else{'[TOT]'})  |  RemoteHWInfo: $(if(Get-Process RemoteHWInfo -EA 0){'[OK]'}else{'[TOT]'})  |  ThermalGuard: $(if(Get-CimInstance Win32_Process|?{$_.CommandLine -match 'ThermalGuard'}){'[OK]'}else{'[TOT]'})"
+"HWiNFO64: $(if(Get-Process HWiNFO64 -EA 0){'[OK]'}else{'[DEAD]'})  |  RemoteHWInfo: $(if(Get-Process RemoteHWInfo -EA 0){'[OK]'}else{'[DEAD]'})  |  ThermalGuard: $(if(Get-CimInstance Win32_Process|?{$_.CommandLine -match 'ThermalGuard'}){'[OK]'}else{'[DEAD]'})"
 ```
 
-## Dienste beenden
+## Stopping Services
 
-| Prozess | Beenden |
+| Process | How to stop |
 |---|---|
-| ThermalGuard | Task-Manager → Details → `powershell.exe` / `pwsh.exe` mit ThermalGuard → Task beenden |
-| RemoteHWInfo | Task-Manager → Details → `RemoteHWInfo.exe` → Task beenden |
-| HWiNFO64 | Tray-Icon → Rechtsklick → Exit |
+| ThermalGuard | Task Manager → Details → `powershell.exe` / `pwsh.exe` with ThermalGuard → End task |
+| RemoteHWInfo | Task Manager → Details → `RemoteHWInfo.exe` → End task |
+| HWiNFO64 | Tray icon → Right-click → Exit |
 
 ---
 
-## Beispiel-Setups
+## Example Setups
 
-### Setup A: User A (RTX 5070 Ti + eigener ntfy-Server)
+### Setup A: User A (RTX 5070 Ti + own ntfy server)
 
 ```powershell
-$GPUProfile = "AUTO"      # erkennt NVIDIA automatisch
+$GPUProfile = "AUTO"      # auto-detects NVIDIA
 $EnableNtfy = $true
 $NTFY_URL   = "https://ntfy.example.com"
 $NTFY_TOPIC = "thermalguard"
 $EnableHWiNFO12hReset = $false   # HWiNFO Pro
 ```
 
-### Setup B: Kollege (RX 6800 XT + kein ntfy)
+### Setup B: Colleague (RX 6800 XT + no ntfy)
 
 ```powershell
-$GPUProfile = "AUTO"      # erkennt AMD automatisch
+$GPUProfile = "AUTO"      # auto-detects AMD
 $EnableNtfy = $false
 $EnableHWiNFO12hReset = $true    # HWiNFO Free
 ```
 
-### Setup C: Kollege mit ntfy.sh (kostenlos)
+### Setup C: Colleague with ntfy.sh (free)
 
 ```powershell
 $GPUProfile = "AUTO"
@@ -328,48 +328,48 @@ $NTFY_TOPIC = "thermalguard-yourname"
 
 ---
 
-## Watchdog + 12h-Reset
+## Watchdog + 12h Reset
 
-### Konfiguration
+### Configuration
 
 ```powershell
-$EnableWatchdog       = $true   # Prozess-Überwachung an/aus
-$WatchdogIntervalSec  = 60     # Prüf-Intervall in Sekunden
-$EnableHWiNFO12hReset = $true  # Automatischer Neustart vor 12h-Limit
-$HWiNFOMaxRuntimeMin  = 690   # Neustart nach X Minuten (690 = 11.5h)
+$EnableWatchdog       = $true   # Process monitoring on/off
+$WatchdogIntervalSec  = 60     # Check interval in seconds
+$EnableHWiNFO12hReset = $true  # Automatic restart before 12h limit
+$HWiNFOMaxRuntimeMin  = 690   # Restart after X minutes (690 = 11.5h)
 ```
 
-### Was der Watchdog macht
+### What the Watchdog Does
 
-Alle 60 Sekunden (konfigurierbar) prüft der Watchdog:
+Every 60 seconds (configurable), the watchdog checks:
 
-| Prüfung | Aktion bei Fehler |
+| Check | Action on failure |
 |---|---|
-| HWiNFO64 Prozess weg | Automatischer Neustart + 15s warten |
-| RemoteHWInfo Prozess weg | Automatischer Neustart + 5s warten |
-| HWiNFO Laufzeit > 11.5h | Beide Prozesse stoppen → HWiNFO neu → RemoteHWInfo neu |
-| Endpoint offline | Sofortiger Watchdog-Check (normales Intervall überspringen) |
+| HWiNFO64 process gone | Automatic restart + wait 15s |
+| RemoteHWInfo process gone | Automatic restart + wait 5s |
+| HWiNFO runtime > 11.5h | Stop both → restart HWiNFO → restart RemoteHWInfo |
+| Endpoint offline | Immediate watchdog check (skip normal interval) |
 
-### 12h-Reset Ablauf
+### 12h Reset Sequence
 
 ```
-HWiNFO läuft seit 11.5h
-    ├── Alert: "HWiNFO 12h-Reset"
-    ├── HWiNFO64 stoppen
-    ├── RemoteHWInfo stoppen (braucht neues Shared Memory)
-    ├── 3s warten
-    ├── HWiNFO64 neu starten
-    ├── 15s warten auf Sensor-Init
-    ├── RemoteHWInfo neu starten
-    ├── 5s warten auf HTTP-Server
-    └── Timer zurücksetzen → nächster Reset in 11.5h
+HWiNFO has been running for 11.5h
+    ├── Alert: "HWiNFO 12h reset"
+    ├── Stop HWiNFO64
+    ├── Stop RemoteHWInfo (needs new Shared Memory)
+    ├── Wait 3s
+    ├── Restart HWiNFO64
+    ├── Wait 15s for sensor init
+    ├── Restart RemoteHWInfo
+    ├── Wait 5s for HTTP server
+    └── Reset timer → next reset in 11.5h
 ```
 
-Bei Fehlern wird ein Alert gesendet. ThermalGuard beendet sich **nicht** — es pollt weiter und versucht beim nächsten Watchdog-Durchlauf erneut.
+On error, an alert is sent. ThermalGuard does **not** exit — it keeps polling and retries on the next watchdog cycle.
 
 ### HWiNFO Pro
 
-Wer HWiNFO Pro hat kann den 12h-Reset abschalten:
+Users with HWiNFO Pro can disable the 12h reset:
 
 ```powershell
 $EnableHWiNFO12hReset = $false
@@ -377,166 +377,166 @@ $EnableHWiNFO12hReset = $false
 
 ---
 
-## Sensor-Labels prüfen (bei Problemen)
+## Checking Sensor Labels (Troubleshooting)
 
-Falls ein Sensor nicht erkannt wird, Labels manuell prüfen:
+If a sensor isn't being detected, check labels manually:
 
-1. HWiNFO64 + RemoteHWInfo müssen laufen
+1. HWiNFO64 + RemoteHWInfo must be running
 2. Browser → `http://localhost:60000/json.json`
-3. Strg+F → nach dem Sensor suchen
-4. `labelOriginal` im JSON mit `SensorMatch` im Script vergleichen
+3. Ctrl+F → search for the sensor
+4. Compare `labelOriginal` in the JSON with `SensorMatch` in the script
 
 ---
 
 ## Troubleshooting
 
-### "HWiNFO64 konnte nicht installiert werden"
+### "HWiNFO64 could not be installed"
 
-winget braucht den Windows Update Service. Prüfen:
+winget requires the Windows Update Service. Check:
 ```powershell
 Get-Service wuauserv | Select-Object Status, StartType
 ```
-Falls deaktiviert:
+If disabled:
 ```powershell
 Set-Service wuauserv -StartupType Manual; Start-Service wuauserv
 ```
 
-Oder HWiNFO64 manuell installieren: [hwinfo.com/download](https://www.hwinfo.com/download/)
+Or install HWiNFO64 manually: [hwinfo.com/download](https://www.hwinfo.com/download/)
 
-### "RemoteHWInfo Download fehlgeschlagen"
+### "RemoteHWInfo download failed"
 
-GitHub nicht erreichbar oder Firewall blockt. Manuell:
+GitHub unreachable or firewall blocking. Manual download:  
 [RemoteHWInfo v0.5 ZIP](https://github.com/Demion/remotehwinfo/releases/download/v0.5/RemoteHWInfo_v0.5.zip)
 
-### "HTTP-Endpoint nicht erreichbar"
+### "HTTP endpoint not reachable"
 
-- HWiNFO64 im Sensors-only Modus?
-- Shared Memory aktiv? (wird automatisch per Registry gesetzt)
-- RemoteHWInfo Prozess läuft? → Task-Manager → Details
-- Port 60000 frei? → `netstat -ano | findstr 60000`
+- Is HWiNFO64 running in sensors-only mode?
+- Is Shared Memory active? (set automatically via Registry)
+- Is RemoteHWInfo running? → Task Manager → Details
+- Is port 60000 free? → `netstat -ano | findstr 60000`
 
-### "Sensor fehlt" im Log
+### "Sensor missing" in log
 
-Der `SensorMatch`-String passt nicht zu den tatsächlichen Labels. Siehe "Sensor-Labels prüfen".
+The `SensorMatch` string doesn't match the actual labels. See "Checking Sensor Labels" above.
 
-### Toast-Benachrichtigungen kommen nicht
+### Toast notifications not showing
 
-BurntToast installiert?
+Is BurntToast installed?
 ```powershell
 Get-Module -ListAvailable -Name BurntToast
 ```
-Falls nicht:
+If not:
 ```powershell
 Install-Module BurntToast -Force -Scope CurrentUser
 ```
 
-Windows Fokus-Assistent muss **aus** sein: Windows Einstellungen → System → Benachrichtigungen → Fokus-Assistent → Aus
+Focus Assist must be **off**: Windows Settings → System → Notifications → Focus Assist → Off
 
 ---
 
-## PowerShell-Kompatibilität
+## PowerShell Compatibility
 
 | Feature | PS 5.1 | PS 7+ |
 |---|---|---|
-| Script-Ausführung | ✅ | ✅ |
+| Script execution | ✅ | ✅ |
 | BurntToast | ✅ | ✅ |
-| Auto-Scan | ✅ | ✅ |
-| Auto-Download | ✅ | ✅ |
+| Auto-scan | ✅ | ✅ |
+| Auto-download | ✅ | ✅ |
 | winget | ✅ | ✅ |
 
-Die `.bat` erkennt automatisch ob `pwsh.exe` (PS7) verfügbar ist und bevorzugt es. Fallback auf `powershell.exe` (PS5.1).
+The `.bat` automatically detects whether `pwsh.exe` (PS7) is available and prefers it. Falls back to `powershell.exe` (PS5.1).
 
 ---
 
-## Architektur
+## Architecture
 
 ```
 Start-HWiNFO-Remote.vbs (shell:startup)
     │
     └── Start-HWiNFO-Remote.bat
             │
-            ├── PS-Version erkennen (pwsh oder powershell)
-            ├── Shared Memory Registry setzen
-            ├── -Resolve: Pfade scannen + Auto-Download
-            │       ├── HWiNFO64 suchen → winget install
-            │       └── RemoteHWInfo suchen → GitHub ZIP
+            ├── Detect PS version (pwsh or powershell)
+            ├── Set Shared Memory Registry key
+            ├── -Resolve: scan paths + auto-download
+            │       ├── Find HWiNFO64 → winget install
+            │       └── Find RemoteHWInfo → GitHub ZIP
             │
-            ├── HWiNFO64.exe starten
-            ├── RemoteHWInfo.exe starten (hidden)
-            └── HWiNFO-ThermalGuard.ps1 starten (hidden)
+            ├── Start HWiNFO64.exe
+            ├── Start RemoteHWInfo.exe (hidden)
+            └── Start HWiNFO-ThermalGuard.ps1 (hidden)
                     │
-                    ├── BurntToast prüfen/installieren
-                    ├── Alle Prozesse + Endpoint prüfen
-                    ├── Watchdog alle 60s
-                    │       ├── HWiNFO64 alive? → Neustart wenn down
-                    │       ├── RemoteHWInfo alive? → Neustart wenn down
-                    │       └── HWiNFO > 11.5h? → 12h-Reset
-                    ├── Polling-Loop alle 5s
-                    │       ├── Stufe 1: Toast + ntfy
-                    │       ├── Stufe 2: taskkill
-                    │       └── Stufe 3: shutdown.exe
+                    ├── Check/install BurntToast
+                    ├── Check all processes + endpoint
+                    ├── Watchdog every 60s
+                    │       ├── HWiNFO64 alive? → restart if down
+                    │       ├── RemoteHWInfo alive? → restart if down
+                    │       └── HWiNFO > 11.5h? → 12h reset
+                    ├── Polling loop every 5s
+                    │       ├── Stage 1: Toast + ntfy
+                    │       ├── Stage 2: taskkill
+                    │       └── Stage 3: shutdown.exe
                     │
                     └── Log → %USERPROFILE%\HWiNFO-ThermalGuard\
 ```
 
 ---
 
-## Limitierungen
+## Limitations
 
-- **HWiNFO Free 12h-Limit** wird automatisch behandelt: Watchdog startet HWiNFO + RemoteHWInfo vor Ablauf neu (Standard: nach 11.5h). Mit `$EnableHWiNFO12hReset = $false` abschaltbar. HWiNFO Pro hat kein Limit.
-- **RemoteHWInfo Watchdog** erkennt Abstürze und startet den Prozess automatisch neu. Bei Endpoint-Ausfall wird sofort ein Watchdog-Check erzwungen.
-- **12V-2x6 Pin-Überwachung** ist bei der ASUS Prime 5070 Ti nicht nativ über Software-Telemetrie verfügbar (Power Detector+ nur bei ROG Astral/Matrix).
-- **Toast im Vollbild** wird von Windows unterdrückt. ntfy ist die Absicherung.
-- **Auto-Download** benötigt Internetzugang beim ersten Start. Danach offline-fähig.
+- **HWiNFO Free 12h limit** is handled automatically: the watchdog restarts HWiNFO + RemoteHWInfo before the limit expires (default: after 11.5h). Disable with `$EnableHWiNFO12hReset = $false`. HWiNFO Pro has no limit.
+- **RemoteHWInfo watchdog** detects crashes and automatically restarts the process. On endpoint failure, an immediate watchdog check is triggered.
+- **12V-2x6 pin monitoring** is not natively available via software telemetry on the ASUS Prime 5070 Ti (Power Detector+ is ROG Astral/Matrix only).
+- **Toast in fullscreen** is suppressed by Windows. ntfy is the backup.
+- **Auto-download** requires internet access on first run. Fully offline afterwards.
 
 ---
 
-## Lizenz
+## License
 
-Frei verwendbar. Keine Gewährleistung — thermischer Schutz ist am Ende immer Sache der Hardware.
+Free to use. No warranty — thermal protection is ultimately always a matter of hardware.
 
 ---
 
 ## fipha Integration (HWiNFO → MQTT → Home Assistant)
 
-### Was ist fipha?
+### What is fipha?
 
-[fipha](https://github.com/mhwlng/fipha) ist ein MQTT-Bridge für HWiNFO64 Shared Memory. Liest Sensordaten aus und publisht sie via MQTT Discovery an Home Assistant. Ermöglicht Echtzeit-Monitoring von CPU/GPU/Wasserkühlungs-Sensoren im Smarthome.
+[fipha](https://github.com/mhwlng/fipha) is an MQTT bridge for HWiNFO64 Shared Memory. It reads sensor data and publishes it via MQTT Discovery to Home Assistant, enabling real-time monitoring of CPU/GPU/liquid cooling sensors in your smart home.
 
 ### Installation
 
-1. [fipha v0.0.2.0 herunterladen](https://github.com/mhwlng/fipha/releases/tag/v0.0.2.0)
-2. Nach `C:\Tools\fip-ha-0.0.2.0\` entpacken
-3. `mqtt.config` anpassen:
+1. [Download fipha v0.0.2.0](https://github.com/mhwlng/fipha/releases/tag/v0.0.2.0)
+2. Extract to `C:\Tools\fip-ha-0.0.2.0\`
+3. Configure `mqtt.config`:
    ```json
    {
      "mqttBroker": "192.168.1.10",
      "mqttPort": 1883,
      "mqttUser": "mqtt_fipha",
-     "mqttPassword": "deinpasswort"
+     "mqttPassword": "yourpassword"
    }
    ```
-4. `HWINFO.inc` mit Sensor-Mappings erstellen (siehe unten)
+4. Create `HWINFO.inc` with sensor mappings (see below)
 
-### Auto-Start mit ThermalGuard
+### Auto-Start with ThermalGuard
 
-fipha wird automatisch mit den anderen Diensten gestartet wenn:
+fipha is automatically started alongside the other services when:
 
 ```powershell
 # In HWiNFO-ThermalGuard.ps1:
-$fipha_Path = ""              # leer = Auto-Scan
-$EnableFipha = $true          # Toggle an/aus
+$fipha_Path = ""              # empty = auto-scan
+$EnableFipha = $true          # toggle on/off
 ```
 
-**Scan-Pfade:**
+**Scan paths:**
 1. `C:\Tools\fip-ha-0.0.2.0\fipha.exe`
 2. `C:\Tools\fipha\fipha.exe`
 3. `%USERPROFILE%\Desktop\fipha\fipha.exe`
 4. `%USERPROFILE%\Downloads\fipha\fipha.exe`
 
-### HWINFO.inc Sensor-Mapping
+### HWINFO.inc Sensor Mapping
 
-Beispiel für Ryzen CPU + NVIDIA GPU mit Wasserkühlung:
+Example for Ryzen CPU + NVIDIA GPU with liquid cooling:
 
 ```ini
 [MySystem]
@@ -557,7 +557,7 @@ SensorMatch=0x1000004,GPU Memory Junction Temperature,temperature,sensor.mysyste
 
 ### Home Assistant Package
 
-Entities landen automatisch via MQTT Discovery in HA:
+Entities appear automatically in HA via MQTT Discovery:
 - `sensor.mysystem_water_cooling_temp`
 - `sensor.mysystem_water_cooling_flow`
 - `sensor.mysystem_water_cooling_conductivity`
@@ -567,16 +567,16 @@ Entities landen automatisch via MQTT Discovery in HA:
 
 ### Troubleshooting
 
-**fipha startet nicht:**
-- Pfad korrekt in Auto-Scan gefunden? Logs checken
-- Toggle `$EnableFipha = $true` gesetzt?
-- Malwarebytes Firewall: fipha.exe Port 1883 outbound erlauben
+**fipha won't start:**
+- Path found correctly by auto-scan? Check logs
+- Toggle `$EnableFipha = $true` set?
+- Malwarebytes firewall: allow fipha.exe outbound on port 1883
 
-**Keine MQTT-Verbindung:**
-- Mosquitto Broker läuft? (Port 1883 erreichbar?)
-- mqtt.config Credentials korrekt?
-- `mqtt_fipha` User in HA angelegt?
+**No MQTT connection:**
+- Mosquitto broker running? (port 1883 reachable?)
+- mqtt.config credentials correct?
+- `mqtt_fipha` user created in HA?
 
-**Entities fehlen in HA:**
-- HWINFO.inc SensorIDs stimmen? (via `http://localhost:60000/json.json` prüfen)
-- HWiNFO64 Shared Memory aktiv? (wird auto-aktiviert via Registry)
+**Entities missing in HA:**
+- HWINFO.inc sensor IDs correct? (check via `http://localhost:60000/json.json`)
+- HWiNFO64 Shared Memory active? (auto-enabled via Registry)
