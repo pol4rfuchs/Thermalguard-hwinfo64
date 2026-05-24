@@ -1,11 +1,15 @@
 # HWiNFO Thermal Guard v1.4
 
-
-##WIKI https://pol4rfuchs.codeberg.page/ha-appwikis/hwinfo-thermalguard/#home
-
-
 Automatic thermal protection for Windows gaming PCs.  
 Monitors CPU and GPU sensors in real time via HWiNFO + RemoteHWInfo and responds to critical temperatures with a three-stage escalation: **Warning → Kill Processes → Emergency Shutdown.**
+
+[![Wiki](https://img.shields.io/badge/Wiki-Documentation-blue?style=flat-square&logo=gitbook)](https://pol4rfuchs.codeberg.page/ha-appwikis/hwinfo-thermalguard/)
+[![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-5391FE?style=flat-square&logo=powershell&logoColor=white)](https://github.com/PowerShell/PowerShell)
+[![HWiNFO](https://img.shields.io/badge/HWiNFO-64-orange?style=flat-square)](https://www.hwinfo.com/)
+[![License](https://img.shields.io/badge/License-Free-brightgreen?style=flat-square)](#license)
+
+> 📖 **Full documentation, quick start guide and troubleshooting:**  
+> **[pol4rfuchs.codeberg.page/ha-appwikis/hwinfo-thermalguard](https://pol4rfuchs.codeberg.page/ha-appwikis/hwinfo-thermalguard/)**
 
 ---
 
