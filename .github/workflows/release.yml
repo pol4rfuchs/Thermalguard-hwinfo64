@@ -1,0 +1,50 @@
+---
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish Release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build ZIP archive
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $archive = "ThermalGuard-$tag.zip"
+
+          $files = @(
+            "HWiNFO-ThermalGuard.ps1",
+            "Start-HWiNFO-Remote.bat",
+            "Start-HWiNFO-Remote.vbs",
+            "README.md",
+            "LICENSE"
+          )
+
+          foreach ($f in $files) {
+            if (-not (Test-Path $f)) {
+              Write-Error "Expected file not found: $f"
+              exit 1
+            }
+          }
+
+          Compress-Archive -Path $files -DestinationPath $archive -CompressionLevel Optimal
+          Write-Host "Created $archive ($($(Get-Item $archive).Length) bytes)"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ThermalGuard-*.zip
+          generate_release_notes: true
+          fail_on_unmatched_files: true
