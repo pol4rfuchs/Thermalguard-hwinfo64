@@ -10,6 +10,7 @@ on:
     branches: ["**"]
     paths:
       - "**.md"
+  workflow_dispatch:
 
 jobs:
   lint:
