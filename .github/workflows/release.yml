@@ -6,6 +6,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag name for test release (e.g. v1.5-test)"
+        required: true
+        default: "v0.0-test"
 
 permissions:
   contents: write
@@ -17,12 +22,24 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
+
+      - name: Determine tag
+        id: tag
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_EVENT_NAME -eq "workflow_dispatch") {
+            $tag = "${{ github.event.inputs.tag }}"
+          } else {
+            $tag = $env:GITHUB_REF_NAME
+          }
+          echo "TAG=$tag" >> $env:GITHUB_OUTPUT
+          Write-Host "Using tag: $tag"
 
       - name: Build ZIP archive
         shell: pwsh
         run: |
-          $tag = $env:GITHUB_REF_NAME
+          $tag = "${{ steps.tag.outputs.TAG }}"
           $archive = "ThermalGuard-$tag.zip"
 
           $files = @(
@@ -46,6 +63,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.tag.outputs.TAG }}
           files: ThermalGuard-*.zip
           generate_release_notes: true
           fail_on_unmatched_files: true
+          prerelease: ${{ github.event_name == 'workflow_dispatch' }}
