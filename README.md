@@ -9,7 +9,7 @@ Monitors CPU and GPU sensors in real time via HWiNFO + RemoteHWInfo and responds
 [![License](https://img.shields.io/badge/License-Free-brightgreen?style=flat-square)](#license)
 
 > 📖 **Full documentation, quick start guide and troubleshooting:**  
-> **[pol4rfuchs.codeberg.page/ha-appwikis/hwinfo-thermalguard](https://pol4rfuchs.codeberg.page/ha-appwikis/hwinfo-thermalguard/)**
+> **[pol4rfuchs.codeberg.page/ha-appwikis/hwinfo-thermalguard](https://pol4rfuchs.github.io/ha-appwikis/)**
 
 ---
 
