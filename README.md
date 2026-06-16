@@ -22,10 +22,10 @@ Monitors CPU and GPU sensors in real time via HWiNFO + RemoteHWInfo and responds
    - `Start-HWiNFO-Remote.vbs`
 3. Open `HWiNFO-ThermalGuard.ps1` → adjust the first few lines:
 
-```powershell
-$GPUProfile = "AUTO"      # auto-detects GPU (or set to "NVIDIA" / "AMD")
-$EnableNtfy = $false      # no ntfy server? → false
-```
+   ```powershell
+   $GPUProfile = "AUTO"      # auto-detects GPU (or set to "NVIDIA" / "AMD")
+   $EnableNtfy = $false      # no ntfy server? → false
+   ```
 
 4. Right-click `Start-HWiNFO-Remote.bat` → **Run as Administrator**
 5. Done — everything missing will be installed automatically
@@ -35,7 +35,7 @@ $EnableNtfy = $false      # no ntfy server? → false
 ## What Gets Installed Automatically?
 
 | Dependency | Method | Destination |
-|---|---|---|
+| --- | --- | --- |
 | **HWiNFO64** | `winget install` (silent) | Default installation path |
 | **RemoteHWInfo** | GitHub ZIP download + extract | `C:\Tools\RemoteHWInfo\` |
 | **BurntToast** | `Install-Module` (PowerShell) | PS module path |
@@ -48,7 +48,7 @@ If winget fails for HWiNFO (e.g. Windows Update Service is disabled), the log wi
 
 ## File Structure
 
-```
+```text
 C:\Tools\HWiNFO-ThermalGuard\
 ├── HWiNFO-ThermalGuard.ps1      ← Main script
 ├── Start-HWiNFO-Remote.bat      ← Autostart chain
@@ -76,7 +76,7 @@ With `AUTO`, the script detects the GPU via two methods:
 Profiles automatically set the correct sensor labels:
 
 | | NVIDIA | AMD |
-|---|---|---|
+| --- | --- | --- |
 | GPU Temp | `GPU Temperature` | `GPU Temperature` |
 | GPU Hotspot | Not available | `GPU Hot Spot Temperature` |
 | GPU Fan | `GPU Fan1` | `GPU Fan` |
@@ -93,6 +93,7 @@ $EnableNtfy = $true     # Push notifications via ntfy
 ### Setting Up ntfy
 
 **Own server:**
+
 ```powershell
 $EnableNtfy = $true
 $NTFY_URL   = "https://ntfy.example.com"
@@ -100,6 +101,7 @@ $NTFY_TOPIC = "thermalguard"
 ```
 
 **No own server? Use ntfy.sh for free:**
+
 ```powershell
 $EnableNtfy = $true
 $NTFY_URL   = "https://ntfy.sh"
@@ -109,6 +111,7 @@ $NTFY_TOPIC = "thermalguard-yourname"    # any name, just needs to be unique
 Then install the ntfy app (Android/iOS), subscribe to the topic, done.
 
 **Don't want ntfy at all:**
+
 ```powershell
 $EnableNtfy = $false
 ```
@@ -131,7 +134,7 @@ $GPU_FanCritRPM  = 0      # Fan hard stop: 0 RPM under load
 **Reference values:**
 
 | Component | Conservative | Standard | Aggressive |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | CPU Warn | 80°C | 85°C | 88°C |
 | CPU Crit | 88°C | 91°C | 95°C |
 | GPU Warn | 78°C | 83°C | 85°C |
@@ -161,6 +164,7 @@ $KillProcesses = @(
 ```
 
 Find process names in Task Manager under "Details" or via:
+
 ```powershell
 Get-Process | Where-Object { $_.MainWindowTitle -ne "" }
 ```
@@ -186,7 +190,7 @@ $RemoteHWInfo_Path  = ""    # empty = auto-scan
 
 ### What Happens at Startup
 
-```
+```text
 Start-HWiNFO-Remote.vbs (invisible)
     └── Start-HWiNFO-Remote.bat
             ├── Detect PowerShell 7 or 5.1
@@ -206,6 +210,7 @@ All processes have duplicate protection. The `.bat` can be run any number of tim
 ## Path Scan Order
 
 ### HWiNFO64
+
 1. Manual override (`$HWiNFO_Path`)
 2. `C:\Program Files\HWiNFO64\`
 3. `C:\Program Files (x86)\HWiNFO64\`
@@ -217,6 +222,7 @@ All processes have duplicate protection. The `.bat` can be run any number of tim
 9. Auto-install via `winget install REALiX.HWiNFO`
 
 ### RemoteHWInfo
+
 1. Manual override (`$RemoteHWInfo_Path`)
 2. `C:\Tools\RemoteHWInfo\`
 3. `C:\Tools\`
@@ -230,7 +236,7 @@ All processes have duplicate protection. The `.bat` can be run any number of tim
 
 ## 3-Stage Escalation
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────┐
 │                                                                     │
 │  t=0s     Critical threshold reached                                │
@@ -267,12 +273,13 @@ All processes have duplicate protection. The `.bat` can be run any number of tim
 
 ## Logging
 
-```
+```text
 %USERPROFILE%\HWiNFO-ThermalGuard\thermalguard.log
 ```
 
 Example:
-```
+
+```text
 [2026-05-18 14:23:01] [INFO] HWiNFO Thermal Guard v1.3 started
 [2026-05-18 14:23:01] [INFO] PowerShell: 7.6.1 (Core)
 [2026-05-18 14:23:01] [INFO] GPU profile: NVIDIA
@@ -298,7 +305,7 @@ PowerShell one-liner (status of all services):
 ## Stopping Services
 
 | Process | How to stop |
-|---|---|
+| --- | --- |
 | ThermalGuard | Task Manager → Details → `powershell.exe` / `pwsh.exe` with ThermalGuard → End task |
 | RemoteHWInfo | Task Manager → Details → `RemoteHWInfo.exe` → End task |
 | HWiNFO64 | Tray icon → Right-click → Exit |
@@ -352,7 +359,7 @@ $HWiNFOMaxRuntimeMin  = 690   # Restart after X minutes (690 = 11.5h)
 Every 60 seconds (configurable), the watchdog checks:
 
 | Check | Action on failure |
-|---|---|
+| --- | --- |
 | HWiNFO64 process gone | Automatic restart + wait 15s |
 | RemoteHWInfo process gone | Automatic restart + wait 5s |
 | HWiNFO runtime > 11.5h | Stop both → restart HWiNFO → restart RemoteHWInfo |
@@ -360,7 +367,7 @@ Every 60 seconds (configurable), the watchdog checks:
 
 ### 12h Reset Sequence
 
-```
+```text
 HWiNFO has been running for 11.5h
     ├── Alert: "HWiNFO 12h reset"
     ├── Stop HWiNFO64
@@ -401,10 +408,13 @@ If a sensor isn't being detected, check labels manually:
 ### "HWiNFO64 could not be installed"
 
 winget requires the Windows Update Service. Check:
+
 ```powershell
 Get-Service wuauserv | Select-Object Status, StartType
 ```
+
 If disabled:
+
 ```powershell
 Set-Service wuauserv -StartupType Manual; Start-Service wuauserv
 ```
@@ -430,10 +440,13 @@ The `SensorMatch` string doesn't match the actual labels. See "Checking Sensor L
 ### Toast notifications not showing
 
 Is BurntToast installed?
+
 ```powershell
 Get-Module -ListAvailable -Name BurntToast
 ```
+
 If not:
+
 ```powershell
 Install-Module BurntToast -Force -Scope CurrentUser
 ```
@@ -445,7 +458,7 @@ Focus Assist must be **off**: Windows Settings → System → Notifications → 
 ## PowerShell Compatibility
 
 | Feature | PS 5.1 | PS 7+ |
-|---|---|---|
+| --- | --- | --- |
 | Script execution | ✅ | ✅ |
 | BurntToast | ✅ | ✅ |
 | Auto-scan | ✅ | ✅ |
@@ -458,7 +471,7 @@ The `.bat` automatically detects whether `pwsh.exe` (PS7) is available and prefe
 
 ## Architecture
 
-```
+```text
 Start-HWiNFO-Remote.vbs (shell:startup)
     │
     └── Start-HWiNFO-Remote.bat
@@ -516,6 +529,7 @@ Free to use. No warranty — thermal protection is ultimately always a matter of
 1. [Download fipha v0.0.2.0](https://github.com/mhwlng/fipha/releases/tag/v0.0.2.0)
 2. Extract to `C:\Tools\fip-ha-0.0.2.0\`
 3. Configure `mqtt.config`:
+
    ```json
    {
      "mqttBroker": "192.168.1.10",
@@ -524,6 +538,7 @@ Free to use. No warranty — thermal protection is ultimately always a matter of
      "mqttPassword": "yourpassword"
    }
    ```
+
 4. Create `HWINFO.inc` with sensor mappings (see below)
 
 ### Auto-Start with ThermalGuard
@@ -532,11 +547,13 @@ fipha is automatically started alongside the other services when:
 
 ```powershell
 # In HWiNFO-ThermalGuard.ps1:
+
 $fipha_Path = ""              # empty = auto-scan
 $EnableFipha = $true          # toggle on/off
 ```
 
 **Scan paths:**
+
 1. `C:\Tools\fip-ha-0.0.2.0\fipha.exe`
 2. `C:\Tools\fipha\fipha.exe`
 3. `%USERPROFILE%\Desktop\fipha\fipha.exe`
@@ -566,6 +583,7 @@ SensorMatch=0x1000004,GPU Memory Junction Temperature,temperature,sensor.mysyste
 ### Home Assistant Package
 
 Entities appear automatically in HA via MQTT Discovery:
+
 - `sensor.mysystem_water_cooling_temp`
 - `sensor.mysystem_water_cooling_flow`
 - `sensor.mysystem_water_cooling_conductivity`
@@ -573,18 +591,21 @@ Entities appear automatically in HA via MQTT Discovery:
 - `sensor.mysystem_temperature_cpu`
 - `sensor.mysystem_temperature_gpu`
 
-### Troubleshooting
+### fipha Troubleshooting
 
 **fipha won't start:**
+
 - Path found correctly by auto-scan? Check logs
 - Toggle `$EnableFipha = $true` set?
 - Malwarebytes firewall: allow fipha.exe outbound on port 1883
 
 **No MQTT connection:**
+
 - Mosquitto broker running? (port 1883 reachable?)
 - mqtt.config credentials correct?
 - `mqtt_fipha` user created in HA?
 
 **Entities missing in HA:**
+
 - HWINFO.inc sensor IDs correct? (check via `http://localhost:60000/json.json`)
 - HWiNFO64 Shared Memory active? (auto-enabled via Registry)
