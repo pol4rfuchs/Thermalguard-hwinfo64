@@ -348,29 +348,34 @@ function Resolve-RemoteHWInfo {
 }
 
 function Resolve-Fipha {
+    if (-not $EnableFipha) {
+        Write-Log "fipha           [OFF]"
+        return $null
+    }
+
     if ($script:fipha_Path -and (Test-Path $script:fipha_Path)) {
         Write-Log "fipha           [OK] Override: $($script:fipha_Path)"
         return $script:fipha_Path
     }
 
     Write-Log "fipha           Scanning..."
-    $searchPaths = @(
-        "C:\Tools\fip-ha-0.0.2.0\fipha.exe"
-        "C:\Tools\fipha\fipha.exe"
-        "$env:USERPROFILE\Desktop\fipha\fipha.exe"
-        "$env:USERPROFILE\Downloads\fipha\fipha.exe"
-        "$env:USERPROFILE\Downloads\fip-ha-0.0.2.0\fipha.exe"
+    $scanPaths = @(
+        "$ToolsDir\fip-ha-0.0.2.0"
+        "$ToolsDir\fipha"
+        "$ToolsDir"
+        "$env:USERPROFILE\Desktop"
+        "$env:USERPROFILE\Downloads"
+        (Split-Path $PSCommandPath -Parent -ErrorAction SilentlyContinue)
     )
-
-    foreach ($path in $searchPaths) {
-        if (Test-Path $path) {
-            Write-Log "fipha           [OK] $path"
-            return $path
-        }
+    $found = Find-Executable -Name "fipha.exe" -SearchPaths $scanPaths
+    if ($found) {
+        Write-Log "fipha           [OK] Found: $found"
+        return $found
     }
 
-    Write-Log "fipha           [MISSING] Not found. Please install:" "WARN"
-    Write-Log "                https://github.com/mhwlng/fipha/releases" "WARN"
+    Write-Log "fipha           [MISSING] Not found" "WARN"
+    Write-Log "  -> Download: https://github.com/mhwlng/fipha/releases" "WARN"
+    Write-Log "  -> Or set path: \$fipha_Path = 'C:\...\fipha.exe'" "WARN"
     return $null
 }
 
@@ -482,6 +487,29 @@ function Test-Requirements {
         }
     } else {
         Write-Log "ntfy            [OFF]"
+    }
+
+    # fipha (optional)
+    if ($EnableFipha) {
+        $script:ResolvedFipha = Resolve-Fipha
+        if ($script:ResolvedFipha) {
+            $fp = Get-Process fipha -ErrorAction SilentlyContinue
+            if ($fp) {
+                Write-Log "fipha Proc      [OK] PID $($fp.Id)"
+            } else {
+                Write-Log "fipha Proc      [STARTING]..." "WARN"
+                $fiphaDir = Split-Path $script:ResolvedFipha -Parent
+                Start-Process $script:ResolvedFipha -WorkingDirectory $fiphaDir
+                Start-Sleep -Seconds 5
+                $fp = Get-Process fipha -ErrorAction SilentlyContinue
+                if ($fp) {
+                    Write-Log "fipha Proc      [OK] PID $($fp.Id)"
+                } else {
+                    Write-Log "fipha Proc      [WARNING] Could not be started" "WARN"
+                    # Not a hard fail — fipha is optional
+                }
+            }
+        }
     }
 
     Write-Log "=== Software Check complete ==="
@@ -644,6 +672,10 @@ function Invoke-Watchdog {
 
             # Stop RemoteHWInfo too (needs new Shared Memory)
             Stop-Process -Name RemoteHWInfo -Force -ErrorAction SilentlyContinue
+            # Stop fipha too (needs new Shared Memory)
+            if ($EnableFipha) {
+                Stop-Process -Name fipha -Force -ErrorAction SilentlyContinue
+            }
             Start-Sleep -Seconds 2
 
             # Restart HWiNFO
@@ -655,6 +687,14 @@ function Invoke-Watchdog {
             if ($script:ResolvedRemoteHWInfo -and (Test-Path $script:ResolvedRemoteHWInfo)) {
                 Start-Process $script:ResolvedRemoteHWInfo -ArgumentList "-hwinfo=1 -gpuz=0 -afterburner=0" -WindowStyle Hidden
                 Write-Log "WATCHDOG: Waiting 5s for RemoteHWInfo..."
+                Start-Sleep -Seconds 5
+            }
+
+            # Restart fipha
+            if ($EnableFipha -and $script:ResolvedFipha -and (Test-Path $script:ResolvedFipha)) {
+                $fiphaDir = Split-Path $script:ResolvedFipha -Parent
+                Start-Process $script:ResolvedFipha -WorkingDirectory $fiphaDir
+                Write-Log "WATCHDOG: Waiting 5s for fipha..."
                 Start-Sleep -Seconds 5
             }
 
@@ -687,6 +727,25 @@ function Invoke-Watchdog {
             }
         } else {
             Write-Log "WATCHDOG: RemoteHWInfo path not available" "ERROR"
+        }
+    }
+
+    # --- fipha process check (optional) ---
+    if ($EnableFipha -and $script:ResolvedFipha) {
+        $fpProc = Get-Process fipha -ErrorAction SilentlyContinue
+        if (-not $fpProc) {
+            Write-Log "WATCHDOG: fipha no longer active — restarting..." "WARN"
+            if (Test-Path $script:ResolvedFipha) {
+                $fiphaDir = Split-Path $script:ResolvedFipha -Parent
+                Start-Process $script:ResolvedFipha -WorkingDirectory $fiphaDir
+                Start-Sleep -Seconds 5
+                $fpProc = Get-Process fipha -ErrorAction SilentlyContinue
+                if ($fpProc) {
+                    Write-Log "WATCHDOG: fipha restarted (PID $($fpProc.Id))" "INFO"
+                } else {
+                    Write-Log "WATCHDOG: fipha restart failed" "WARN"
+                }
+            }
         }
     }
 }
@@ -835,7 +894,7 @@ function Start-ThermalGuard {
                 $elapsed = [int](((Get-Date) - $triggerTimestamps[$sName]).TotalSeconds)
 
                 if ($elapsed -ge $Stage2Delay -and -not $stage2Executed[$sName]) {
-                    Write-Log "$sName: ${elapsed}s critical — Stage 2" "CRIT"
+                    Write-Log "${sName}: ${elapsed}s critical — Stage 2" "CRIT"
                     Send-Alert -Title "Stage 2: Processes killed" -Body "$sName at $value for ${elapsed}s" -Priority "urgent"
                     if (-not $globalStage2Executed) {
                         Invoke-KillProcesses
@@ -845,14 +904,14 @@ function Start-ThermalGuard {
                 }
 
                 if ($elapsed -ge $Stage3Delay) {
-                    Write-Log "$sName: ${elapsed}s critical — Stage 3: SHUTDOWN" "CRIT"
+                    Write-Log "${sName}: ${elapsed}s critical — Stage 3: SHUTDOWN" "CRIT"
                     Invoke-Shutdown
                     return
                 }
             }
             else {
                 if ($triggerTimestamps[$sName]) {
-                    Write-Log "$sName: value normalized ($value) — timer reset" "INFO"
+                    Write-Log "${sName}: value normalized ($value) — timer reset" "INFO"
                     $triggerTimestamps.Remove($sName)
                     $stage2Executed.Remove($sName)
                     if ($triggerTimestamps.Count -eq 0) { $globalStage2Executed = $false }
