@@ -83,6 +83,27 @@ if ($PSVersionTable.PSVersion.Major -lt 5) {
     exit 1
 }
 
+# === LOGGING =================================================================
+
+$script:LoggedSensorMatchWarnings = @{}
+
+if (-not (Test-Path $LogDir)) {
+    New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+}
+
+function Write-Log {
+    param([string]$Message, [string]$Level = "INFO")
+    $ts   = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $line = "[$ts] [$Level] $Message"
+    Add-Content -Path $LogFile -Value $line -Encoding UTF8
+    Write-Host $line
+    if ((Test-Path $LogFile) -and ((Get-Item $LogFile).Length / 1MB) -gt $MaxLogSizeMB) {
+        $backup = $LogFile -replace '\.log$', "_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+        Move-Item $LogFile $backup -Force
+    }
+}
+
+
 # === HARDWARE DETECTION ======================================================
 
 function Detect-GPUProfile {
@@ -208,26 +229,6 @@ if ($EnableGPU) {
         Name = "GPU Fan"; SensorMatch = $p.FanMatch
         WarnThreshold = $p.FanWarn; CritThreshold = $p.FanCrit
         Type = "fan"; Group = "GPU"
-    }
-}
-
-# === LOGGING =================================================================
-
-$script:LoggedSensorMatchWarnings = @{}
-
-if (-not (Test-Path $LogDir)) {
-    New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
-}
-
-function Write-Log {
-    param([string]$Message, [string]$Level = "INFO")
-    $ts   = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $line = "[$ts] [$Level] $Message"
-    Add-Content -Path $LogFile -Value $line -Encoding UTF8
-    Write-Host $line
-    if ((Test-Path $LogFile) -and ((Get-Item $LogFile).Length / 1MB) -gt $MaxLogSizeMB) {
-        $backup = $LogFile -replace '\.log$', "_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
-        Move-Item $LogFile $backup -Force
     }
 }
 
