@@ -31,19 +31,41 @@ call :log "=========================================================="
 call :log "STEP 1: Detecting PowerShell..."
 set "PS_EXE="
 for /f "delims=" %%P in ('where pwsh 2^>nul') do (
-    if not defined PS_EXE set "PS_EXE=%%P"
+    if not defined PS_EXE (
+        echo %%P | findstr /I /C:"\WindowsApps\" >nul
+        if errorlevel 1 (
+            set "PS_EXE=%%P"
+        ) else (
+            call :log "  - Skipping WindowsApps alias stub: %%P"
+        )
+    )
 )
+
+if defined PS_EXE (
+    :: Validate it is a real executable, not a near-empty alias stub
+    for %%S in ("%PS_EXE%") do set "PS_EXE_SIZE=%%~zS"
+    if !PS_EXE_SIZE! LSS 100000 (
+        call :log "  - WARNING: %PS_EXE% is only !PS_EXE_SIZE! bytes - looks like a stub, not real pwsh.exe. Ignoring."
+        set "PS_EXE="
+    )
+)
+
 if defined PS_EXE (
     call :log "  - pwsh.exe (PowerShell 7) found at: %PS_EXE%"
 ) else (
     set "PS_EXE=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
-    call :log "  - pwsh.exe not found. Falling back to powershell.exe (5.1) at: %PS_EXE%"
+    call :log "  - pwsh.exe not found / invalid. Falling back to powershell.exe (5.1) at: %PS_EXE%"
 )
 call :log "  PS_EXE = %PS_EXE%"
 
+if not exist "%PS_EXE%" (
+    call :log "  FATAL: PS_EXE does not exist on disk: %PS_EXE%"
+    goto :fatal
+)
+
 :: --- UNBLOCK FILES ------------------------------------------------------------
 call :log "STEP 2: Unblocking files (removing Mark-of-the-Web)..."
-"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "Get-ChildItem -LiteralPath '%SCRIPT_DIR%' -Recurse -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue" >> "%LOGFILE%" 2>&1
+"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "Import-Module Microsoft.PowerShell.Utility -ErrorAction SilentlyContinue; Get-ChildItem -LiteralPath '%SCRIPT_DIR%' -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue }" >> "%LOGFILE%" 2>&1
 call :log "  - Unblock-File pass complete (errorlevel %ERRORLEVEL%)"
 
 :: --- SHARED MEMORY -------------------------------------------------------------
@@ -79,6 +101,31 @@ call :log "  Parsed HWINFO_EXE       = [%HWINFO_EXE%]"
 call :log "  Parsed REMOTEHWINFO_EXE = [%REMOTEHWINFO_EXE%]"
 call :log "  Parsed FIPHA_EXE        = [%FIPHA_EXE%]"
 
+call :log "STEP 4b: Unblocking resolved executables (Mark-of-the-Web removal)..."
+if not "%HWINFO_EXE%"=="" if exist "%HWINFO_EXE%" (
+    "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "Import-Module Microsoft.PowerShell.Utility -ErrorAction SilentlyContinue; Unblock-File -LiteralPath '%HWINFO_EXE%' -ErrorAction SilentlyContinue" >> "%LOGFILE%" 2>&1
+    call :log "  - Unblocked: %HWINFO_EXE%"
+)
+if not "%REMOTEHWINFO_EXE%"=="" if exist "%REMOTEHWINFO_EXE%" (
+    "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "Import-Module Microsoft.PowerShell.Utility -ErrorAction SilentlyContinue; Unblock-File -LiteralPath '%REMOTEHWINFO_EXE%' -ErrorAction SilentlyContinue" >> "%LOGFILE%" 2>&1
+    call :log "  - Unblocked: %REMOTEHWINFO_EXE%"
+)
+if not "%FIPHA_EXE%"=="" if exist "%FIPHA_EXE%" (
+    "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "Import-Module Microsoft.PowerShell.Utility -ErrorAction SilentlyContinue; Unblock-File -LiteralPath '%FIPHA_EXE%' -ErrorAction SilentlyContinue" >> "%LOGFILE%" 2>&1
+    call :log "  - Unblocked: %FIPHA_EXE%"
+)
+:: Also unblock the entire folder each resolved exe lives in, in case of DLL dependencies
+if not "%HWINFO_EXE%"=="" (
+    for %%F in ("%HWINFO_EXE%") do "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "Import-Module Microsoft.PowerShell.Utility -ErrorAction SilentlyContinue; Get-ChildItem -LiteralPath '%%~dpF' -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue }" >> "%LOGFILE%" 2>&1
+)
+if not "%REMOTEHWINFO_EXE%"=="" (
+    for %%F in ("%REMOTEHWINFO_EXE%") do "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "Import-Module Microsoft.PowerShell.Utility -ErrorAction SilentlyContinue; Get-ChildItem -LiteralPath '%%~dpF' -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue }" >> "%LOGFILE%" 2>&1
+)
+if not "%FIPHA_EXE%"=="" (
+    for %%F in ("%FIPHA_EXE%") do "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "Import-Module Microsoft.PowerShell.Utility -ErrorAction SilentlyContinue; Get-ChildItem -LiteralPath '%%~dpF' -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue }" >> "%LOGFILE%" 2>&1
+)
+call :log "  - Folder-level unblock pass complete."
+
 if "%HWINFO_EXE%"=="" (
     call :log "  FATAL: HWiNFO64 not found and download failed."
     goto :fatal
@@ -89,10 +136,39 @@ if "%REMOTEHWINFO_EXE%"=="" (
 )
 
 if not exist "%HWINFO_EXE%" (
-    call :log "  WARNING: HWINFO_EXE path does not exist on disk: %HWINFO_EXE%"
+    call :log "  FATAL: HWINFO_EXE path does not exist on disk: %HWINFO_EXE%"
+    goto :fatal
 )
+for %%S in ("%HWINFO_EXE%") do set "HWINFO_SIZE=%%~zS"
+call :log "  HWINFO_EXE size: !HWINFO_SIZE! bytes"
+if !HWINFO_SIZE! LSS 50000 (
+    call :log "  FATAL: HWINFO_EXE looks like a stub/shortcut, not the real exe (!HWINFO_SIZE! bytes)."
+    goto :fatal
+)
+
 if not exist "%REMOTEHWINFO_EXE%" (
-    call :log "  WARNING: REMOTEHWINFO_EXE path does not exist on disk: %REMOTEHWINFO_EXE%"
+    call :log "  FATAL: REMOTEHWINFO_EXE path does not exist on disk: %REMOTEHWINFO_EXE%"
+    goto :fatal
+)
+for %%S in ("%REMOTEHWINFO_EXE%") do set "REMOTE_SIZE=%%~zS"
+call :log "  REMOTEHWINFO_EXE size: !REMOTE_SIZE! bytes"
+if !REMOTE_SIZE! LSS 5000 (
+    call :log "  FATAL: REMOTEHWINFO_EXE looks like a stub/shortcut, not the real exe (!REMOTE_SIZE! bytes)."
+    goto :fatal
+)
+
+if not "%FIPHA_EXE%"=="" (
+    if exist "%FIPHA_EXE%" (
+        for %%S in ("%FIPHA_EXE%") do set "FIPHA_SIZE=%%~zS"
+        call :log "  FIPHA_EXE size: !FIPHA_SIZE! bytes"
+        if !FIPHA_SIZE! LSS 5000 (
+            call :log "  WARNING: FIPHA_EXE looks like a stub (!FIPHA_SIZE! bytes). Disabling fipha for this run."
+            set "FIPHA_EXE="
+        )
+    ) else (
+        call :log "  WARNING: FIPHA_EXE path does not exist on disk: %FIPHA_EXE% - disabling fipha for this run."
+        set "FIPHA_EXE="
+    )
 )
 
 :: ============================================================================

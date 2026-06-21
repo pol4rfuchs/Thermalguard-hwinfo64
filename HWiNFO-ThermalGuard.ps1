@@ -235,15 +235,35 @@ if ($EnableGPU) {
 # === DEPENDENCY SCAN + AUTO-DOWNLOAD =========================================
 
 function Find-Executable {
-    param([string]$Name, [string[]]$SearchPaths)
+    param([string]$Name, [string[]]$SearchPaths, [int]$MinSizeBytes = 5000)
+
     foreach ($dir in $SearchPaths) {
         if (-not $dir -or -not (Test-Path $dir)) { continue }
-        $found = Get-ChildItem -Path $dir -Filter $Name -Recurse -Depth 3 -ErrorAction SilentlyContinue |
-                 Select-Object -First 1
-        if ($found) { return $found.FullName }
+
+        # WindowsApps alias stubs and anything below MinSizeBytes are rejected —
+        # those are placeholder files, not the real executable.
+        $candidates = Get-ChildItem -Path $dir -Filter $Name -Recurse -Depth 3 -ErrorAction SilentlyContinue |
+                      Where-Object {
+                          $_.FullName -notmatch '\\WindowsApps\\' -and
+                          $_.Length -ge $MinSizeBytes
+                      } |
+                      Sort-Object Length -Descending
+
+        if ($candidates) {
+            $pick = $candidates | Select-Object -First 1
+            return $pick.FullName
+        }
     }
-    # PATH search
-    $inPath = Get-Command $Name -ErrorAction SilentlyContinue
+
+    # PATH search — same stub/size filtering applies
+    $inPath = Get-Command $Name -ErrorAction SilentlyContinue |
+              Where-Object {
+                  $_.Source -notmatch '\\WindowsApps\\' -and
+                  (Test-Path $_.Source) -and
+                  ((Get-Item $_.Source).Length -ge $MinSizeBytes)
+              } |
+              Select-Object -First 1
+
     if ($inPath) { return $inPath.Source }
     return $null
 }
