@@ -14,10 +14,10 @@ Automatischer thermischer Schutz für Windows-Gaming-PCs.
    - `Start-HWiNFO-Remote.vbs`
 3. `HWiNFO-ThermalGuard.ps1` öffnen → die ersten Zeilen anpassen:
 
-```powershell
-$GPUProfile = "AUTO"      # erkennt GPU automatisch (oder "NVIDIA" / "AMD")
-$EnableNtfy = $false      # kein ntfy-Server? → false
-```
+   ```powershell
+   $GPUProfile = "AUTO"      # erkennt GPU automatisch (oder "NVIDIA" / "AMD")
+   $EnableNtfy = $false      # kein ntfy-Server? → false
+   ```
 
 4. `Start-HWiNFO-Remote.bat` per Rechtsklick → **Als Administrator ausführen**
 5. Fertig — alles was fehlt wird automatisch installiert
@@ -27,7 +27,7 @@ $EnableNtfy = $false      # kein ntfy-Server? → false
 ## Was wird automatisch installiert?
 
 | Dependency | Methode | Ziel |
-|---|---|---|
+| --- | --- | --- |
 | **HWiNFO64** | `winget install` (silent) | Standard-Installationspfad |
 | **RemoteHWInfo** | GitHub ZIP-Download + Entpacken | `C:\Tools\RemoteHWInfo\` |
 | **BurntToast** | `Install-Module` (PowerShell) | PS-Modulpfad |
@@ -40,7 +40,7 @@ Falls winget bei HWiNFO fehlschlägt (z.B. Windows Update Service deaktiviert), 
 
 ## Dateistruktur
 
-```
+```text
 C:\Tools\HWiNFO-ThermalGuard\
 ├── HWiNFO-ThermalGuard.ps1      ← Hauptscript
 ├── Start-HWiNFO-Remote.bat      ← Autostart-Kette
@@ -68,7 +68,7 @@ Bei `AUTO` erkennt das Script die GPU automatisch über zwei Methoden:
 Die Profile setzen automatisch die richtigen Sensor-Labels:
 
 | | NVIDIA | AMD |
-|---|---|---|
+| --- | --- | --- |
 | GPU Temp | `GPU Temperature` | `GPU Temperature` |
 | GPU Hotspot | Nicht verfügbar | `GPU Hot Spot Temperature` |
 | GPU Fan | `GPU Fan1` | `GPU Fan` |
@@ -85,6 +85,7 @@ $EnableNtfy = $true     # Push-Benachrichtigungen via ntfy
 ### ntfy einrichten
 
 **Eigener Server:**
+
 ```powershell
 $EnableNtfy = $true
 $NTFY_URL   = "https://ntfy.alpenfestung.duckdns.org"
@@ -92,6 +93,7 @@ $NTFY_TOPIC = "ha-system"
 ```
 
 **Kein eigener Server? Kostenlos über ntfy.sh:**
+
 ```powershell
 $EnableNtfy = $true
 $NTFY_URL   = "https://ntfy.sh"
@@ -101,6 +103,7 @@ $NTFY_TOPIC = "thermalguard-deinname"    # beliebiger Name, muss nur einzigartig
 Dann die ntfy-App installieren (Android/iOS), Topic subscriben, fertig.
 
 **Kein ntfy gewünscht:**
+
 ```powershell
 $EnableNtfy = $false
 ```
@@ -123,7 +126,7 @@ $GPU_FanCritRPM  = 0      # Fan Hard-Stop: 0 RPM bei Last
 **Richtwerte:**
 
 | Komponente | Konservativ | Standard | Aggressiv |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | CPU Warn | 80°C | 85°C | 88°C |
 | CPU Crit | 88°C | 91°C | 95°C |
 | GPU Warn | 78°C | 83°C | 85°C |
@@ -153,6 +156,7 @@ $KillProcesses = @(
 ```
 
 Prozessnamen findest du im Task-Manager unter "Details" oder via:
+
 ```powershell
 Get-Process | Where-Object { $_.MainWindowTitle -ne "" }
 ```
@@ -178,7 +182,7 @@ $RemoteHWInfo_Path  = ""    # leer = auto-scan
 
 ### Was beim Start passiert
 
-```
+```text
 Start-HWiNFO-Remote.vbs (unsichtbar)
     └── Start-HWiNFO-Remote.bat
             ├── PowerShell 7 oder 5.1 erkennen
@@ -198,6 +202,7 @@ Alle Prozesse haben Duplikat-Schutz. Die `.bat` kann beliebig oft ausgeführt we
 ## Pfad-Scan Reihenfolge
 
 ### HWiNFO64
+
 1. Manueller Override (`$HWiNFO_Path`)
 2. `C:\Program Files\HWiNFO64\`
 3. `C:\Program Files (x86)\HWiNFO64\`
@@ -209,6 +214,7 @@ Alle Prozesse haben Duplikat-Schutz. Die `.bat` kann beliebig oft ausgeführt we
 9. Auto-Install via `winget install REALiX.HWiNFO`
 
 ### RemoteHWInfo
+
 1. Manueller Override (`$RemoteHWInfo_Path`)
 2. `C:\Tools\RemoteHWInfo\`
 3. `C:\Tools\`
@@ -222,7 +228,7 @@ Alle Prozesse haben Duplikat-Schutz. Die `.bat` kann beliebig oft ausgeführt we
 
 ## 3-Stufen-Eskalation
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────┐
 │                                                                     │
 │  t=0s     Kritische Schwelle erreicht                               │
@@ -259,12 +265,13 @@ Alle Prozesse haben Duplikat-Schutz. Die `.bat` kann beliebig oft ausgeführt we
 
 ## Logging
 
-```
+```text
 %USERPROFILE%\HWiNFO-ThermalGuard\thermalguard.log
 ```
 
 Beispiel:
-```
+
+```text
 [2026-05-18 14:23:01] [INFO] HWiNFO Thermal Guard v1.3 gestartet
 [2026-05-18 14:23:01] [INFO] PowerShell: 7.6.1 (Core)
 [2026-05-18 14:23:01] [INFO] GPU-Profil: NVIDIA
@@ -290,7 +297,7 @@ PowerShell-Einzeiler (Status aller Dienste):
 ## Dienste beenden
 
 | Prozess | Beenden |
-|---|---|
+| --- | --- |
 | ThermalGuard | Task-Manager → Details → `powershell.exe` / `pwsh.exe` mit ThermalGuard → Task beenden |
 | RemoteHWInfo | Task-Manager → Details → `RemoteHWInfo.exe` → Task beenden |
 | HWiNFO64 | Tray-Icon → Rechtsklick → Exit |
@@ -344,7 +351,7 @@ $HWiNFOMaxRuntimeMin  = 690   # Neustart nach X Minuten (690 = 11.5h)
 Alle 60 Sekunden (konfigurierbar) prüft der Watchdog:
 
 | Prüfung | Aktion bei Fehler |
-|---|---|
+| --- | --- |
 | HWiNFO64 Prozess weg | Automatischer Neustart + 15s warten |
 | RemoteHWInfo Prozess weg | Automatischer Neustart + 5s warten |
 | HWiNFO Laufzeit > 11.5h | Beide Prozesse stoppen → HWiNFO neu → RemoteHWInfo neu |
@@ -352,7 +359,7 @@ Alle 60 Sekunden (konfigurierbar) prüft der Watchdog:
 
 ### 12h-Reset Ablauf
 
-```
+```text
 HWiNFO läuft seit 11.5h
     ├── Alert: "HWiNFO 12h-Reset"
     ├── HWiNFO64 stoppen
@@ -393,10 +400,13 @@ Falls ein Sensor nicht erkannt wird, Labels manuell prüfen:
 ### "HWiNFO64 konnte nicht installiert werden"
 
 winget braucht den Windows Update Service. Prüfen:
+
 ```powershell
 Get-Service wuauserv | Select-Object Status, StartType
 ```
+
 Falls deaktiviert:
+
 ```powershell
 Set-Service wuauserv -StartupType Manual; Start-Service wuauserv
 ```
@@ -422,10 +432,13 @@ Der `SensorMatch`-String passt nicht zu den tatsächlichen Labels. Siehe "Sensor
 ### Toast-Benachrichtigungen kommen nicht
 
 BurntToast installiert?
+
 ```powershell
 Get-Module -ListAvailable -Name BurntToast
 ```
+
 Falls nicht:
+
 ```powershell
 Install-Module BurntToast -Force -Scope CurrentUser
 ```
@@ -437,7 +450,7 @@ Windows Fokus-Assistent muss **aus** sein: Windows Einstellungen → System → 
 ## PowerShell-Kompatibilität
 
 | Feature | PS 5.1 | PS 7+ |
-|---|---|---|
+| --- | --- | --- |
 | Script-Ausführung | ✅ | ✅ |
 | BurntToast | ✅ | ✅ |
 | Auto-Scan | ✅ | ✅ |
@@ -450,7 +463,7 @@ Die `.bat` erkennt automatisch ob `pwsh.exe` (PS7) verfügbar ist und bevorzugt 
 
 ## Architektur
 
-```
+```text
 Start-HWiNFO-Remote.vbs (shell:startup)
     │
     └── Start-HWiNFO-Remote.bat
