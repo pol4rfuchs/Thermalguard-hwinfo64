@@ -500,14 +500,21 @@ function Test-Requirements {
             } else {
                 Write-Log "fipha Proc      [STARTING]..." "WARN"
                 $fiphaDir = Split-Path $script:ResolvedFipha -Parent
-                Start-Process $script:ResolvedFipha -WorkingDirectory $fiphaDir
-                Start-Sleep -Seconds 5
-                $fp = Get-Process fipha -ErrorAction SilentlyContinue
-                if ($fp) {
-                    Write-Log "fipha Proc      [OK] PID $($fp.Id)"
-                } else {
-                    Write-Log "fipha Proc      [WARNING] Could not be started" "WARN"
-                    # Not a hard fail — fipha is optional
+                try {
+                    $fiphaStart = Start-Process $script:ResolvedFipha -WorkingDirectory $fiphaDir -PassThru -ErrorAction Stop
+                    Write-Log "fipha Proc      Launched PID $($fiphaStart.Id), waiting 5s..."
+                    Start-Sleep -Seconds 5
+                    $fp = Get-Process fipha -ErrorAction SilentlyContinue
+                    $stillAlive = Get-Process -Id $fiphaStart.Id -ErrorAction SilentlyContinue
+                    if ($fp) {
+                        Write-Log "fipha Proc      [OK] PID $($fp.Id)"
+                    } elseif ($stillAlive) {
+                        Write-Log "fipha Proc      [WARNING] Alive (PID $($fiphaStart.Id)) but process name is '$($stillAlive.ProcessName)', not 'fipha'" "WARN"
+                    } else {
+                        Write-Log "fipha Proc      [ERROR] Exited immediately after launch — check fipha config/log" "ERROR"
+                    }
+                } catch {
+                    Write-Log "fipha Proc      [ERROR] Start-Process threw: $_" "ERROR"
                 }
             }
         }
@@ -733,20 +740,40 @@ function Invoke-Watchdog {
 
     # --- fipha process check (optional) ---
     if ($EnableFipha -and $script:ResolvedFipha) {
-        $fpProc = Get-Process fipha -ErrorAction SilentlyContinue
-        if (-not $fpProc) {
-            Write-Log "WATCHDOG: fipha no longer active — restarting..." "WARN"
-            if (Test-Path $script:ResolvedFipha) {
+        try {
+            $fpProc = Get-Process fipha -ErrorAction SilentlyContinue
+            if (-not $fpProc) {
+                Write-Log "WATCHDOG: fipha no longer active — restarting..." "WARN"
+                Write-Log "WATCHDOG: fipha path = $($script:ResolvedFipha)" "INFO"
+
+                if (-not (Test-Path $script:ResolvedFipha)) {
+                    Write-Log "WATCHDOG: fipha exe missing at resolved path!" "ERROR"
+                    return
+                }
+
                 $fiphaDir = Split-Path $script:ResolvedFipha -Parent
-                Start-Process $script:ResolvedFipha -WorkingDirectory $fiphaDir
+                Write-Log "WATCHDOG: Launching fipha from $fiphaDir ..." "INFO"
+
+                $proc = Start-Process $script:ResolvedFipha -WorkingDirectory $fiphaDir -PassThru -ErrorAction Stop
+                Write-Log "WATCHDOG: Start-Process returned PID $($proc.Id), waiting 5s..." "INFO"
+
                 Start-Sleep -Seconds 5
+
+                # Re-check by PID first (most reliable), then by name
+                $stillAlive = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
                 $fpProc = Get-Process fipha -ErrorAction SilentlyContinue
+
                 if ($fpProc) {
                     Write-Log "WATCHDOG: fipha restarted (PID $($fpProc.Id))" "INFO"
+                } elseif ($stillAlive) {
+                    Write-Log "WATCHDOG: fipha process alive (PID $($proc.Id)) but not matched by name '$($stillAlive.ProcessName)'" "WARN"
                 } else {
-                    Write-Log "WATCHDOG: fipha restart failed" "WARN"
+                    Write-Log "WATCHDOG: fipha exited immediately after launch (PID $($proc.Id) gone) — check fipha.log / config" "ERROR"
+                    Send-Alert -Title "Watchdog: fipha crash-loop" -Body "fipha exits immediately after restart. Check config." -Priority "high"
                 }
             }
+        } catch {
+            Write-Log "WATCHDOG: fipha restart threw exception: $_" "ERROR"
         }
     }
 }
