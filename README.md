@@ -1,7 +1,7 @@
 
 
 
-# CURRENTLY BROKEN !
+# FIXED!
 HWiNFO Thermal Guard v1.4
 
 Automatischer thermischer Schutz für Windows-Gaming-PCs.  
