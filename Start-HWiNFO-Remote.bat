@@ -41,35 +41,25 @@ if not exist "%THERMALGUARD_PS1%" (
 call :log "  - Found: %THERMALGUARD_PS1%"
 
 :: --- STEP 2: PowerShell engine detection -------------------------------------
+:: Uses the standard install path directly and actually executes the binary
+:: to confirm it runs, instead of searching PATH (which can match a
+:: non-functional WindowsApps execution-alias stub) or only checking file
+:: size (which would not catch a present-but-broken executable).
 call :log "STEP 2: Detecting PowerShell..."
-set "PS_EXE="
-for /f "delims=" %%P in ('where pwsh 2^>nul') do (
-    if not defined PS_EXE (
-        echo %%P | findstr /I /C:"\WindowsApps\" >nul
-        if errorlevel 1 (
-            set "PS_EXE=%%P"
-        ) else (
-            call :log "  - Skipping WindowsApps alias stub: %%P"
-        )
-    )
-)
-if defined PS_EXE (
-    for %%S in ("%PS_EXE%") do set "PS_EXE_SIZE=%%~zS"
-    if !PS_EXE_SIZE! LSS 100000 (
-        call :log "  - WARNING: %PS_EXE% is only !PS_EXE_SIZE! bytes, looks like a stub. Ignoring."
-        set "PS_EXE="
-    )
-)
-if defined PS_EXE (
-    call :log "  - Using PowerShell 7: %PS_EXE%"
-) else (
-    set "PS_EXE=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
-    call :log "  - PowerShell 7 not found/invalid. Using PowerShell 5.1: %PS_EXE%"
-)
-if not exist "%PS_EXE%" (
-    call :log "FATAL: PS_EXE does not exist on disk: %PS_EXE%"
-    goto :fatal
-)
+
+set "PS_EXE=%ProgramFiles%\PowerShell\7\pwsh.exe"
+"%PS_EXE%" -NoLogo -NoProfile -NonInteractive -Command "exit 0" >nul 2>&1
+if not errorlevel 1 goto :POWERSHELL_FOUND
+
+set "PS_EXE=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+"%PS_EXE%" -NoLogo -NoProfile -NonInteractive -Command "exit 0" >nul 2>&1
+if not errorlevel 1 goto :POWERSHELL_FOUND
+
+call :log "FATAL: No working PowerShell installation found (checked PowerShell 7 standard path and Windows PowerShell 5.1)."
+goto :fatal
+
+:POWERSHELL_FOUND
+call :log "  - Using PowerShell: %PS_EXE%"
 
 :: --- STEP 3: unblock ONLY the known script files, no recursive folder scan --
 :: Report finding #20: blanket recursive unblocking of entire directories
