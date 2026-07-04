@@ -1,0 +1,87 @@
+name: "Sensor data: Intel CPU / AMD GPU / Intel Arc"
+description: "Help add Intel CPU, AMD GPU, or Intel Arc GPU support by sharing your HWiNFO sensor readings."
+title: "[sensor-data] "
+labels:
+  - "sensor-data"
+  - "help wanted"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping out! ThermalGuard currently only has confirmed sensor
+        labels for AMD Ryzen CPUs and NVIDIA GPUs. To support Intel CPUs, AMD
+        GPUs, and Intel Arc GPUs properly (instead of guessing label names),
+        we need real sensor data from those systems.
+
+        This takes about 2-3 minutes:
+        1. Make sure HWiNFO64 + RemoteHWInfo are running (same setup ThermalGuard needs)
+        2. Download and run `Get-SensorDump.ps1` from the repo's `tools/` folder
+        3. It samples for at least 120 seconds - start a game or some load
+           partway through if you can, so both idle and load values get
+           captured, not just idle
+        4. Paste the output below, or attach the generated `.txt` file
+
+        The script only reads your local sensor values (temps, clocks, power,
+        fans) - no personal info, no auto-upload. Please review the output
+        yourself before pasting, same as with any data you share online.
+
+  - type: dropdown
+    id: hardware-type
+    attributes:
+      label: What hardware is this data for?
+      options:
+        - Intel CPU
+        - AMD GPU
+        - Intel Arc GPU
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: input
+    id: cpu-model
+    attributes:
+      label: CPU model
+      placeholder: "e.g. Intel Core i7-14700K"
+    validations:
+      required: false
+
+  - type: input
+    id: gpu-model
+    attributes:
+      label: GPU model
+      placeholder: "e.g. AMD RX 9070 XT / Intel Arc B580"
+    validations:
+      required: false
+
+  - type: input
+    id: os-version
+    attributes:
+      label: Windows version
+      placeholder: "e.g. Windows 11 24H2"
+    validations:
+      required: false
+
+  - type: input
+    id: hwinfo-version
+    attributes:
+      label: HWiNFO / RemoteHWInfo version
+      placeholder: "e.g. HWiNFO 8.06, RemoteHWInfo v0.5"
+    validations:
+      required: false
+
+  - type: textarea
+    id: sensor-dump
+    attributes:
+      label: Sensor dump
+      description: "Paste the output of Get-SensorDump.ps1 here (or leave empty and attach the .txt file to this issue instead)."
+      render: text
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: consent
+    attributes:
+      label: Confirmation
+      options:
+        - label: I've reviewed the sensor dump and I'm okay sharing it publicly in this issue.
+          required: true
