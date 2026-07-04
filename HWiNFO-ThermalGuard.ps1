@@ -41,6 +41,27 @@ $EnableFipha = $true
 $NTFY_URL   = "https://ntfy.alpenfestung.duckdns.org"
 $NTFY_TOPIC = "ha-system"
 
+# --- ALL-TEMPS OVERVIEW REPORT ---------------------------------------------------
+# Independent of the 4 monitored sensors above (CPU/GPU/Hotspot/Fan): this scans
+# EVERY temperature reading HWiNFO reports (all cores, all VRM/chipset/SSD/etc.
+# sensors it exposes) and sends one summary listing everything currently over
+# $AllTempsThreshold. Sent once at script start, then again only when the SET of
+# sensors over the threshold changes (something new crosses over, or drops back
+# under) - not on every poll, to avoid spam.
+$EnableAllTempsReport = $true
+$AllTempsThreshold    = 60
+# HWiNFO/RemoteHWInfo's JSON "unit" field for temperature readings. Confirmed via
+# the self-test log line (search "unit=" in thermalguard.log after first run,
+# Write-Log around the sensor self-test). Adjust this regex if your log shows a
+# different string.
+# HWiNFO/RemoteHWInfo's JSON "unit" field for temperature readings. Confirmed
+# live against this system's json.json: it is literally the degree sign + C
+# (e.g. "43 C" reading has unit "?C"). Built from a char code below instead of
+# a literal non-ASCII character, to keep this file pure ASCII per the header
+# note (avoids the BOM/codepage corruption class of bug already fixed once).
+$script:DegreeSign   = [char]0x00B0
+$TempUnitPattern     = "(?i)^\s*($($script:DegreeSign)c|deg\s*c|c)\s*`$"
+
 # --- THRESHOLDS ------------------------------------------------------------
 # Hardware basis: AMD Ryzen 7 5800X3D has a Tjmax (hardware throttle point)
 # of 90 C. The previous default Crit value of 91 C was ABOVE that point,
@@ -57,6 +78,24 @@ $GPU_HotspotCrit = 105
 $GPU_FanWarnRPM  = 300
 $GPU_FanCritRPM  = 0
 $GPULoadThreshold = 50
+# GDDR6X/7 memory junction temp. Micron rates GDDR6X junction around 110 C max;
+# this leaves margin under that similar to the CPU/GPU die margins above.
+$GPU_MemJunctionWarn = 90
+$GPU_MemJunctionCrit = 100
+
+# --- PERFORMANCE LIMIT FLAGS (NVIDIA) -------------------------------------------
+# HWiNFO exposes these as separate Yes/No readings per GPU. Alerted on
+# edge-change (0->1 and 1->0), not every poll, since they are already
+# instantaneous flags, not thresholds. "Utilization" is deliberately excluded:
+# it reads 1 whenever the GPU just isn't maxed out, which is normal idle/light
+# load behavior, not a throttle. "SLI GPUBoost Sync" excluded, single-GPU only.
+$EnablePerfLimitAlerts = $true
+$PerfLimitFlagsToWatch = @(
+    "Performance Limit - Power"
+    "Performance Limit - Thermal"
+    "Performance Limit - Reliability Voltage"
+    "Performance Limit - Max Operating Voltage"
+)
 
 # --- TIMING --------------------------------------------------------------------
 $PollInterval = 5
@@ -416,26 +455,42 @@ if ($GPUProfile -eq "AUTO") {
 
 $GPUProfiles = @{
     "NVIDIA" = @{
-        TempMatch    = "GPU Temperature"
-        TempWarn     = $GPU_WarnTemp
-        TempCrit     = $GPU_CritTemp
-        HotspotMatch = $null
-        FanMatch     = "GPU Fan1"
-        FanWarn      = $GPU_FanWarnRPM
-        FanCrit      = $GPU_FanCritRPM
-        LoadMatch    = "GPU Core Load"
+        TempMatch        = "GPU Temperature"
+        TempWarn         = $GPU_WarnTemp
+        TempCrit         = $GPU_CritTemp
+        HotspotMatch     = $null
+        FanMatch         = "GPU Fan1"
+        FanWarn          = $GPU_FanWarnRPM
+        FanCrit          = $GPU_FanCritRPM
+        LoadMatch        = "GPU Core Load"
+        # Confirmed live on RTX 5070 Ti (sensorIndex 10, unit degree-C).
+        MemJunctionMatch = "GPU Memory Junction Temperature"
+        MemJunctionWarn  = $GPU_MemJunctionWarn
+        MemJunctionCrit  = $GPU_MemJunctionCrit
+        # Board power draw, confirmed live (unit W). Used only as an
+        # informational line in the all-temps report, not a threshold alert -
+        # the Performance Limit - Power flag already fires exactly when the
+        # power limit is actually restricting the GPU.
+        PowerMatch       = "GPU Power"
     }
     "AMD" = @{
-        TempMatch    = "GPU Temperature"
-        TempWarn     = $GPU_WarnTemp
-        TempCrit     = $GPU_CritTemp
-        HotspotMatch = "GPU Hot Spot Temperature"
-        HotspotWarn  = $GPU_HotspotWarn
-        HotspotCrit  = $GPU_HotspotCrit
-        FanMatch     = "GPU Fan"
-        FanWarn      = $GPU_FanWarnRPM
-        FanCrit      = $GPU_FanCritRPM
-        LoadMatch    = "GPU Utilization"
+        TempMatch        = "GPU Temperature"
+        TempWarn         = $GPU_WarnTemp
+        TempCrit         = $GPU_CritTemp
+        HotspotMatch     = "GPU Hot Spot Temperature"
+        HotspotWarn      = $GPU_HotspotWarn
+        HotspotCrit      = $GPU_HotspotCrit
+        FanMatch         = "GPU Fan"
+        FanWarn          = $GPU_FanWarnRPM
+        FanCrit          = $GPU_FanCritRPM
+        LoadMatch        = "GPU Utilization"
+        # Not confirmed on real AMD hardware yet (labels above were, on this
+        # system's NVIDIA card) - leave off until verified via the same
+        # json.json dump on an AMD GPU, rather than guessing a label.
+        MemJunctionMatch = $null
+        MemJunctionWarn  = $GPU_MemJunctionWarn
+        MemJunctionCrit  = $GPU_MemJunctionCrit
+        PowerMatch       = $null
     }
 }
 
@@ -475,6 +530,14 @@ if ($EnableGPU) {
         $Sensors += @{
             Name = "GPU Hotspot"; SensorMatch = $p.HotspotMatch
             WarnThreshold = $p.HotspotWarn; CritThreshold = $p.HotspotCrit
+            Type = "temp"; Group = "GPU"
+            PreferredSensorIndex = $script:DetectedGPUSensorIndex
+        }
+    }
+    if ($p.MemJunctionMatch) {
+        $Sensors += @{
+            Name = "GPU Memory Junction"; SensorMatch = $p.MemJunctionMatch
+            WarnThreshold = $p.MemJunctionWarn; CritThreshold = $p.MemJunctionCrit
             Type = "temp"; Group = "GPU"
             PreferredSensorIndex = $script:DetectedGPUSensorIndex
         }
@@ -633,6 +696,112 @@ function Send-Ntfy {
         Write-Log "ntfy sent: $Title"
     } catch {
         Write-Log "ntfy failed: $_" "WARN"
+    }
+}
+
+$script:LastOverThresholdKey = $null
+
+function Get-AllTempsOverThreshold {
+    param($SensorData, [double]$Threshold)
+
+    $seen   = @{}
+    $result = @()
+    foreach ($reading in $SensorData.readings) {
+        if ([string]$reading.unit -notmatch $TempUnitPattern) { continue }
+        $val = $null
+        if (-not [double]::TryParse([string]$reading.value, [ref]$val)) { continue }
+        if ($val -lt $Threshold) { continue }
+
+        # Same dedup key as elsewhere: sensorIndex+readingId identifies one
+        # physical reading, HWiNFO/RemoteHWInfo can list it twice.
+        $dedupKey = "$($reading.sensorIndex)|$($reading.readingId)"
+        if ($seen.ContainsKey($dedupKey)) { continue }
+        $seen[$dedupKey] = $true
+
+        $label = if ($reading.labelUser) { $reading.labelUser } else { $reading.labelOriginal }
+        $result += [PSCustomObject]@{
+            Label = $label
+            Value = $val
+        }
+    }
+    return $result | Sort-Object Label
+}
+
+function Get-CurrentGPUPowerLine {
+    param($SensorData)
+
+    if (-not $EnableGPU) { return $null }
+    $powerMatch = $GPUProfiles[$GPUProfile].PowerMatch
+    if (-not $powerMatch) { return $null }
+
+    $reading = $SensorData.readings | Where-Object {
+        $_.labelOriginal -eq $powerMatch -and $_.sensorIndex -eq $script:DetectedGPUSensorIndex
+    } | Select-Object -First 1
+    if (-not $reading) { return $null }
+
+    return "GPU Power: $($reading.value) W"
+}
+
+function Invoke-AllTempsReportCheck {
+    param($SensorData)
+
+    if (-not $EnableAllTempsReport) { return }
+
+    $overList = Get-AllTempsOverThreshold -SensorData $SensorData -Threshold $AllTempsThreshold
+    $currentKey = ($overList | ForEach-Object { "$($_.Label)=$($_.Value)" }) -join ';'
+
+    if ($currentKey -eq $script:LastOverThresholdKey) { return }
+    $script:LastOverThresholdKey = $currentKey
+
+    if ($overList.Count -eq 0) {
+        Write-Log "All-temps report: back under $AllTempsThreshold C on all sensors"
+        Send-Alert -Title "Temps back under $AllTempsThreshold C" -Body "No sensor above threshold anymore." -Priority "default"
+        return
+    }
+
+    $lines = $overList | ForEach-Object { "$($_.Label): $($_.Value) C" }
+    $powerLine = Get-CurrentGPUPowerLine -SensorData $SensorData
+    if ($powerLine) { $lines += $powerLine }
+    $body  = $lines -join "`n"
+    Write-Log "All-temps report: $($overList.Count) sensor(s) over $AllTempsThreshold C -> $($lines -join ' | ')"
+    Send-Alert -Title "Temps over $AllTempsThreshold C ($($overList.Count))" -Body $body -Priority "default"
+}
+
+$script:PerfLimitLastState = @{}
+
+function Invoke-PerfLimitCheck {
+    param($SensorData)
+
+    if (-not $EnablePerfLimitAlerts) { return }
+    if (-not $EnableGPU) { return }
+
+    foreach ($flagName in $PerfLimitFlagsToWatch) {
+        $reading = $SensorData.readings | Where-Object {
+            $_.labelOriginal -eq $flagName -and $_.sensorIndex -eq $script:DetectedGPUSensorIndex
+        } | Select-Object -First 1
+        if (-not $reading) { continue }
+
+        $isActive = ([double]$reading.value -eq 1)
+        $prev = $script:PerfLimitLastState[$flagName]
+
+        # First poll: record the baseline silently, only alert if it starts
+        # out already active (real condition, not a false "just changed").
+        if ($null -eq $prev) {
+            $script:PerfLimitLastState[$flagName] = $isActive
+            if (-not $isActive) { continue }
+        } elseif ($prev -eq $isActive) {
+            continue
+        } else {
+            $script:PerfLimitLastState[$flagName] = $isActive
+        }
+
+        if ($isActive) {
+            Write-Log "$flagName ACTIVE (GPU throttling)" "WARN"
+            Send-Alert -Title "GPU Throttle: $flagName" -Body "GPU is currently limited by this factor." -Priority "high"
+        } else {
+            Write-Log "$flagName cleared"
+            Send-Alert -Title "$flagName cleared" -Body "GPU no longer limited by this factor." -Priority "default"
+        }
     }
 }
 
@@ -885,6 +1054,7 @@ function Start-ThermalGuard {
     Write-Log "CPU Monitoring:  $(if ($EnableCPU) {'ON'} else {'OFF'})"
     Write-Log "GPU Monitoring:  $(if ($EnableGPU) {'ON'} else {'OFF'})"
     Write-Log "ntfy:            $(if ($EnableNtfy) {'ON'} else {'OFF'})"
+    Write-Log "All-temps report: $(if ($EnableAllTempsReport) {"ON (>$AllTempsThreshold C)"} else {'OFF'})"
     Write-Log "fipha:           $(if ($EnableFipha) {'ON'} else {'OFF'})"
     Write-Log "Sensors:         $($Sensors.Count) configured"
     Write-Log "Polling:         every ${PollInterval}s"
@@ -955,6 +1125,9 @@ function Start-ThermalGuard {
             $endpointDown      = $false
             $lastEndpointAlert = $null
         }
+
+        Invoke-AllTempsReportCheck -SensorData $sensorData
+        Invoke-PerfLimitCheck -SensorData $sensorData
 
         # Report finding #10: explicit self-test on the first successful
         # poll so an operator can verify exactly which sensor each
