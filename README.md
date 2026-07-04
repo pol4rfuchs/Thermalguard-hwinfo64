@@ -13,6 +13,19 @@ Automatischer thermischer Schutz für Windows-Gaming-PCs.
 [![Intel CPU](https://img.shields.io/badge/Intel_CPU-nicht_unterst%C3%BCtzt-red?logo=intel&logoColor=white)](#sensordaten-beisteuern)
 [![Intel Arc GPU](https://img.shields.io/badge/Intel_Arc_GPU-nicht_unterst%C3%BCtzt-red?logo=intel&logoColor=white)](#sensordaten-beisteuern)
 
+**Details nach Generation/Sockel:**
+
+| Architektur | Generation | Status |
+| --- | --- | --- |
+| AMD CPU (AM4) | Ryzen 1000–5000 (Zen–Zen 3) | ✅ Getestet (5800X3D) |
+| AMD CPU (AM5) | Ryzen 7000–9000 (Zen 4/5) | ⚠️ Gleiches Sensor-Label (`Tctl/Tdie`), sollte laufen, aber ungetestet |
+| NVIDIA GPU | RTX 50 (Blackwell) | ✅ Voll getestet (5070 Ti), inkl. Memory-Junction-Temp + Performance-Limit-Flags |
+| NVIDIA GPU | RTX 20/30/40 (Turing–Ada) | ⚠️ Basis-Temp sollte laufen, Memory-Junction-Temp wird von NVIDIA-Treibern auf älteren Karten teils gar nicht gemeldet |
+| AMD GPU | RX 9000 (RDNA4) | ✅ Basis-Monitoring getestet (9070 XT) |
+| AMD GPU | RX 6000/7000 (RDNA2/3) | ⚠️ Gleiche Sensor-Labels, sollte laufen, aber ungetestet |
+| Intel CPU | alle | ❌ Nicht unterstützt (kein Tctl/Tdie-Äquivalent, andere Sensor-Namen) |
+| Intel Arc GPU | A-/B-Serie | ❌ Nicht unterstützt |
+
 > AMD GPU: Basis-Monitoring (Temp/Hotspot/Fan/Load) läuft. Erweiterte Sensoren
 > (Memory-Junction-Temp, Power-Draw), die NVIDIA seit kurzem hat, fehlen für
 > AMD noch mangels bestätigter Sensor-Labels auf echter Hardware.

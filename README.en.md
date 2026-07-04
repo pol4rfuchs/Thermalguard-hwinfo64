@@ -13,6 +13,19 @@ Monitors CPU and GPU sensors in real time via HWiNFO + RemoteHWInfo and reacts t
 [![Intel CPU](https://img.shields.io/badge/Intel_CPU-not_supported-red?logo=intel&logoColor=white)](#contributing-sensor-data)
 [![Intel Arc GPU](https://img.shields.io/badge/Intel_Arc_GPU-not_supported-red?logo=intel&logoColor=white)](#contributing-sensor-data)
 
+**Details by generation/socket:**
+
+| Architecture | Generation | Status |
+| --- | --- | --- |
+| AMD CPU (AM4) | Ryzen 1000-5000 (Zen-Zen 3) | ✅ Tested (5800X3D) |
+| AMD CPU (AM5) | Ryzen 7000-9000 (Zen 4/5) | ⚠️ Same sensor label (`Tctl/Tdie`), should work, untested |
+| NVIDIA GPU | RTX 50 (Blackwell) | ✅ Fully tested (5070 Ti), incl. memory junction temp + performance-limit flags |
+| NVIDIA GPU | RTX 20/30/40 (Turing-Ada) | ⚠️ Base temp should work; memory junction temp isn't always reported by NVIDIA's drivers on older cards |
+| AMD GPU | RX 9000 (RDNA4) | ✅ Base monitoring tested (9070 XT) |
+| AMD GPU | RX 6000/7000 (RDNA2/3) | ⚠️ Same sensor labels, should work, untested |
+| Intel CPU | all | ❌ Not supported (no Tctl/Tdie equivalent, different sensor names) |
+| Intel Arc GPU | A-/B-series | ❌ Not supported |
+
 > AMD GPU: base monitoring (temp/hotspot/fan/load) works. Extended sensors
 > (memory junction temp, power draw), which NVIDIA has recently gained, are
 > still missing for AMD for lack of confirmed sensor labels on real hardware.
