@@ -26,7 +26,8 @@ jobs:
         shell: pwsh
         run: |
           $results = Invoke-ScriptAnalyzer `
-            -Path HWiNFO-ThermalGuard.ps1 `
+            -Path . `
+            -Recurse `
             -Severity Error, Warning `
             -IncludeDefaultRules
 
