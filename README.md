@@ -1,5 +1,7 @@
 # HWiNFO Thermal Guard v1.4
 
+**[Deutsch](README.md)** | [English](README.en.md)
+
 Automatischer thermischer Schutz für Windows-Gaming-PCs.  
 Überwacht CPU- und GPU-Sensoren in Echtzeit via HWiNFO + RemoteHWInfo und reagiert bei kritischen Temperaturen in drei Eskalationsstufen: **Warnung → Programme beenden → Notabschaltung.**
 
