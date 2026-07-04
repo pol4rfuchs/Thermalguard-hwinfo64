@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag name for test release (e.g. v1.5-test)"
+        description: "Tag name for test release, e.g. v1.5-test (no spaces)"
         required: true
         default: "v0.0-test"
 
@@ -35,6 +35,19 @@ jobs:
           }
           echo "TAG=$tag" >> $env:GITHUB_OUTPUT
           Write-Host "Using tag: $tag"
+
+      - name: Validate tag format
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.tag.outputs.TAG }}"
+          # Git tags can't contain whitespace or most special characters.
+          # This also catches the "v1.42 stable" style typo before it hits
+          # the GitHub API and fails with a cryptic 422.
+          if ($tag -notmatch '^v[0-9]+\.[0-9]+(\.[0-9]+)?(-[A-Za-z0-9][A-Za-z0-9.-]*)?$') {
+            Write-Error "Invalid tag: '$tag'. Expected format like v1.42 or v1.42-test (no spaces, must start with v<major>.<minor>)."
+            exit 1
+          }
+          Write-Host "Tag '$tag' is valid."
 
       - name: Build ZIP archive
         shell: pwsh
