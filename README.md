@@ -3,6 +3,21 @@
 Automatischer thermischer Schutz für Windows-Gaming-PCs.  
 Überwacht CPU- und GPU-Sensoren in Echtzeit via HWiNFO + RemoteHWInfo und reagiert bei kritischen Temperaturen in drei Eskalationsstufen: **Warnung → Programme beenden → Notabschaltung.**
 
+**Unterstützt:**
+
+[![AMD CPU](https://img.shields.io/badge/AMD_CPU-supported-brightgreen)](#gpu-profil)
+[![NVIDIA GPU](https://img.shields.io/badge/NVIDIA_GPU-supported-brightgreen)](#gpu-profil)
+[![AMD GPU](https://img.shields.io/badge/AMD_GPU-supported-brightgreen)](#gpu-profil)
+
+**Noch nicht unterstützt** (Sensor-Labels fehlen, siehe [Sensordaten beisteuern](#sensordaten-beisteuern)):
+
+[![Intel CPU](https://img.shields.io/badge/Intel_CPU-not_yet_supported-lightgrey)](#sensordaten-beisteuern)
+[![Intel Arc GPU](https://img.shields.io/badge/Intel_Arc_GPU-not_yet_supported-lightgrey)](#sensordaten-beisteuern)
+
+> AMD GPU: Basis-Monitoring (Temp/Hotspot/Fan/Load) läuft. Erweiterte Sensoren
+> (Memory-Junction-Temp, Power-Draw), die NVIDIA seit kurzem hat, fehlen für
+> AMD noch mangels bestätigter Sensor-Labels auf echter Hardware.
+
 ---
 
 ## Schnellstart (frischer PC, nix installiert)
@@ -501,6 +516,17 @@ Start-HWiNFO-Remote.vbs (shell:startup)
 - **12V-2x6 Pin-Überwachung** ist bei der ASUS Prime 5070 Ti nicht nativ über Software-Telemetrie verfügbar (Power Detector+ nur bei ROG Astral/Matrix).
 - **Toast im Vollbild** wird von Windows unterdrückt. ntfy ist die Absicherung.
 - **Auto-Download** benötigt Internetzugang beim ersten Start. Danach offline-fähig.
+
+---
+
+## Sensordaten beisteuern
+
+Intel CPUs, AMD GPUs (erweitertes Monitoring) und Intel Arc GPUs fehlen aktuell,
+weil die genauen HWiNFO-Sensor-Labels auf echter Hardware bestätigt werden
+müssen, statt geraten zu werden. Wer eins davon hat, kann in 2-3 Minuten
+helfen: [Issue mit dem Sensor-Data-Template öffnen](../../issues/new?template=sensor-data-request.yml),
+`tools/Get-SensorDump.ps1` laufen lassen (sampled 120s, idealerweise mit
+Last/Spiel dazwischen) und die Ausgabe reinpasten.
 
 ---
 
