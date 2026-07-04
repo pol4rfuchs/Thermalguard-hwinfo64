@@ -1,6 +1,6 @@
 @echo off
 :: ============================================================================
-:: HWiNFO Thermal Guard - Autostart Launcher v2.0
+:: HWiNFO Thermal Guard - Autostart Launcher v1.42
 ::
 :: ARCHITECTURE CHANGE: this file no longer starts or checks HWiNFO64,
 :: RemoteHWInfo or fipha itself. HWiNFO-ThermalGuard.ps1 is now the single
@@ -27,7 +27,7 @@ if not exist "%LOGDIR%" mkdir "%LOGDIR%" >nul 2>&1
 echo. > "%LOGFILE%"
 
 call :log "=========================================================="
-call :log "HWiNFO Thermal Guard - Autostart begin (launcher v2.0)"
+call :log "HWiNFO Thermal Guard - Autostart begin (launcher v1.42)"
 call :log "Script dir: %SCRIPT_DIR%"
 call :log "=========================================================="
 

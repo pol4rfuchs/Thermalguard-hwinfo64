@@ -1,5 +1,5 @@
-name: "Sensor data: Intel CPU / AMD GPU / Intel Arc"
-description: "Help add Intel CPU, AMD GPU, or Intel Arc GPU support by sharing your HWiNFO sensor readings."
+name: "Sensor data: help expand or verify hardware support"
+description: "Share your HWiNFO sensor readings to add unsupported hardware or verify hardware marked as untested."
 title: "[sensor-data] "
 labels:
   - "sensor-data"
@@ -8,10 +8,16 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for helping out! ThermalGuard currently only has confirmed sensor
-        labels for AMD Ryzen CPUs and NVIDIA GPUs. To support Intel CPUs, AMD
-        GPUs, and Intel Arc GPUs properly (instead of guessing label names),
-        we need real sensor data from those systems.
+        Thanks for helping out! There are two ways this helps, depending on your hardware:
+
+        - **Not supported yet** (Intel CPU, Intel Arc GPU): we need real sensor
+          labels from your system to add support at all, since these use
+          completely different sensor names than AMD/NVIDIA.
+        - **Should work, but unverified** (AMD AM5 CPUs, NVIDIA RTX 20/30/40,
+          AMD RX 6000/7000): these reuse the same sensor labels as already-tested
+          hardware, so they probably work - but nobody's confirmed it on real
+          hardware yet. Your dump moves these from "should work" to "confirmed"
+          in the README.
 
         This takes about 2-3 minutes:
         1. Make sure HWiNFO64 + RemoteHWInfo are running (same setup ThermalGuard needs)
@@ -29,11 +35,14 @@ body:
     id: hardware-type
     attributes:
       label: What hardware is this data for?
+      description: "Not supported yet vs. should-work-but-unverified - see the intro above."
       options:
-        - Intel CPU
-        - AMD GPU
-        - Intel Arc GPU
-        - Other / not sure
+        - "Intel CPU (not supported yet)"
+        - "Intel Arc GPU (not supported yet)"
+        - "AMD CPU - AM5 / Ryzen 7000-9000 (unverified)"
+        - "NVIDIA GPU - RTX 20/30/40, Turing-Ada (unverified extended sensors)"
+        - "AMD GPU - RX 6000/7000, RDNA2/3 (unverified)"
+        - "Other / not sure"
     validations:
       required: true
 
@@ -41,7 +50,7 @@ body:
     id: cpu-model
     attributes:
       label: CPU model
-      placeholder: "e.g. Intel Core i7-14700K"
+      placeholder: "e.g. Intel Core i7-14700K / AMD Ryzen 9 9950X3D"
     validations:
       required: false
 
@@ -49,7 +58,7 @@ body:
     id: gpu-model
     attributes:
       label: GPU model
-      placeholder: "e.g. AMD RX 9070 XT / Intel Arc B580"
+      placeholder: "e.g. AMD RX 9070 XT / Intel Arc B580 / RTX 4080"
     validations:
       required: false
 

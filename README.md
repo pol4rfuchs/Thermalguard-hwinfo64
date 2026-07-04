@@ -1,4 +1,4 @@
-# HWiNFO Thermal Guard v1.4
+# HWiNFO Thermal Guard v1.42
 
 **[Deutsch](README.md)** | [English](README.en.md)
 
@@ -274,7 +274,7 @@ Alle Prozesse haben Duplikat-Schutz. Die `.bat` kann beliebig oft ausgeführt we
 │           └── Wert fällt unter Schwelle? → Timer Reset              │
 │                                                                     │
 │  t=30s    STUFE 2 — Programme beenden                               │
-│           ├── taskkill auf Prozessliste                              │
+│           ├── taskkill auf Prozessliste                             │
 │           └── Alert: "Programme beendet"                            │
 │                                                                     │
 │  t=30-90s Polling weiter                                            │
@@ -306,7 +306,7 @@ Alle Prozesse haben Duplikat-Schutz. Die `.bat` kann beliebig oft ausgeführt we
 Beispiel:
 
 ```text
-[2026-05-18 14:23:01] [INFO] HWiNFO Thermal Guard v1.3 gestartet
+[2026-05-18 14:23:01] [INFO] HWiNFO Thermal Guard v1.42 gestartet
 [2026-05-18 14:23:01] [INFO] PowerShell: 7.6.1 (Core)
 [2026-05-18 14:23:01] [INFO] GPU-Profil: NVIDIA
 [2026-05-18 14:23:02] [OK]   HWiNFO64 Gefunden: C:\Program Files\HWiNFO64\HWiNFO64.exe

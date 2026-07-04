@@ -1,4 +1,4 @@
-# HWiNFO Thermal Guard v1.4
+# HWiNFO Thermal Guard v1.42
 
 [Deutsch](README.md) | **[English](README.en.md)**
 
@@ -306,7 +306,7 @@ All processes have duplicate protection. The `.bat` can be run as many times as 
 Example:
 
 ```text
-[2026-05-18 14:23:01] [INFO] HWiNFO Thermal Guard v1.3 started
+[2026-05-18 14:23:01] [INFO] HWiNFO Thermal Guard v1.42 started
 [2026-05-18 14:23:01] [INFO] PowerShell: 7.6.1 (Core)
 [2026-05-18 14:23:01] [INFO] GPU profile: NVIDIA
 [2026-05-18 14:23:02] [OK]   HWiNFO64 found: C:\Program Files\HWiNFO64\HWiNFO64.exe

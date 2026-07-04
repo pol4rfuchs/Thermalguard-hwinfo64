@@ -1,6 +1,6 @@
 ﻿#requires -Version 5.1
 # ============================================================================
-# HWiNFO Thermal Guard v2.0
+# HWiNFO Thermal Guard
 # Single supervisor: this script is the ONLY process manager for
 # HWiNFO64, RemoteHWInfo and fipha. The autostart .bat only launches THIS
 # script; it does not start or check those three processes itself.
@@ -13,6 +13,13 @@
 # additionally saved with a UTF-8 byte-order-mark (BOM) as a second,
 # independent safeguard against the same class of bug.
 # ============================================================================
+
+# --- VERSION ---------------------------------------------------------------
+# Single source of truth for the version number, used in the startup log
+# line below. There was a stale "v2.0" hardcoded in two separate places
+# after an abandoned v2.0 attempt was reverted - this variable exists so
+# that never happens silently again. Bump this and nowhere else.
+$ScriptVersion = "1.42"
 
 # === USER CONFIGURATION ======================================================
 
@@ -1047,7 +1054,7 @@ function Invoke-Watchdog {
 function Start-ThermalGuard {
 
     Write-Log "=========================================="
-    Write-Log "HWiNFO Thermal Guard v2.0 started"
+    Write-Log "HWiNFO Thermal Guard v$ScriptVersion started"
     Write-Log "=========================================="
     Write-Log "PowerShell:      $($PSVersionTable.PSVersion) ($($PSVersionTable.PSEdition))"
     Write-Log "GPU Profile:     $GPUProfile"

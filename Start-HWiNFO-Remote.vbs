@@ -1,5 +1,5 @@
 ' ============================================================================
-' Start-HWiNFO-Remote.vbs  (v2.0)
+' Start-HWiNFO-Remote.vbs  (v1.42)
 '
 ' This launches Start-HWiNFO-Remote.bat completely invisibly (no CMD window),
 ' WITHOUT requesting UAC elevation here. Report finding #16: a UAC prompt
