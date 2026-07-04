@@ -46,7 +46,10 @@ jobs:
             "HWiNFO-ThermalGuard.ps1",
             "Start-HWiNFO-Remote.bat",
             "Start-HWiNFO-Remote.vbs",
+            "Install-ScheduledTask.ps1",
+            "Get-SensorDump.ps1",
             "README.md",
+            "README.en.md",
             "LICENSE"
           )
 

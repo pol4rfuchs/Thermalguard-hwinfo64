@@ -15,7 +15,7 @@ body:
 
         This takes about 2-3 minutes:
         1. Make sure HWiNFO64 + RemoteHWInfo are running (same setup ThermalGuard needs)
-        2. Download and run `Get-SensorDump.ps1` from the repo's `tools/` folder
+        2. Download and run `Get-SensorDump.ps1` from the repo's root folder
         3. It samples for at least 120 seconds - start a game or some load
            partway through if you can, so both idle and load values get
            captured, not just idle

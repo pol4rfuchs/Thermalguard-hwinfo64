@@ -1,0 +1,68 @@
+---
+name: Dependabot Alerts to Issues
+
+on:
+  schedule:
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: read
+  issues: write
+
+jobs:
+  sync:
+    name: Open issues for new Dependabot alerts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Ensure labels exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh label create security --repo "$REPO" --color B60205 --description "Security-related issue" || true
+          gh label create dependencies --repo "$REPO" --color 0366d6 --description "Dependency updates" || true
+
+      - name: Mirror open Dependabot alerts as issues
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -e
+          gh api "repos/$REPO/dependabot/alerts?state=open" --paginate > alerts.json
+
+          count=$(jq 'length' alerts.json)
+          echo "Found $count open Dependabot alert(s)."
+
+          jq -c '.[]' alerts.json | while read -r alert; do
+            ghsa=$(echo "$alert" | jq -r '.security_advisory.ghsa_id')
+            package=$(echo "$alert" | jq -r '.dependency.package.name')
+            severity=$(echo "$alert" | jq -r '.security_advisory.severity')
+            summary=$(echo "$alert" | jq -r '.security_advisory.summary')
+            html_url=$(echo "$alert" | jq -r '.html_url')
+            title="Dependabot alert: $package ($severity) - $ghsa"
+
+            existing=$(gh issue list --repo "$REPO" --search "\"$ghsa\" in:body" --state all --json number --jq '.[0].number // empty')
+            if [ -n "$existing" ]; then
+              echo "Skipping $ghsa, already tracked in issue #$existing"
+              continue
+            fi
+
+            body="Dependabot found a vulnerability that hasn't been resolved yet.
+
+          - Package: $package
+          - Severity: $severity
+          - Advisory: $ghsa
+          - Summary: $summary
+          - Details: $html_url
+
+          This issue was opened automatically because Dependabot alerts live in the
+          Security tab and don't otherwise show up as issues. Closing this issue
+          does not resolve the underlying alert - resolve it via the linked
+          Dependabot PR or by dismissing the alert directly."
+
+            gh issue create --repo "$REPO" --title "$title" --body "$body" --label "security,dependencies"
+            echo "Opened issue for $ghsa"
+          done
