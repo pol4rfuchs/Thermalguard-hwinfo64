@@ -19,7 +19,23 @@
 # line below. There was a stale "v2.0" hardcoded in two separate places
 # after an abandoned v2.0 attempt was reverted - this variable exists so
 # that never happens silently again. Bump this and nowhere else.
-$ScriptVersion = "1.44"
+$ScriptVersion = "1.42"
+
+# --- TLS (GLOBAL, EARLY) -----------------------------------------------------
+# PowerShell 5.1 / .NET Framework does not always default to TLS 1.2, which
+# some servers reject outright. This used to only be set locally inside
+# Resolve-BurntToast right before its PSGallery call - meaning any earlier
+# network call (e.g. the ntfy startup check, if Resolve-BurntToast is ever
+# skipped because the module is already installed) ran without it. Setting
+# it here, before anything else runs, means every HTTPS call in this process
+# gets it, not just BurntToast's.
+try {
+    [System.Net.ServicePointManager]::SecurityProtocol = `
+        [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls11
+} catch {
+    # Older .NET Framework builds may not expose Tls11/Tls12 constants at all;
+    # in that case just leave the OS default in place rather than crash.
+}
 
 # === USER CONFIGURATION ======================================================
 
@@ -632,13 +648,31 @@ function Test-Requirements {
     }
 
     if ($EnableNtfy) {
-        try {
-            Invoke-RestMethod -Uri "$NTFY_URL/$NTFY_TOPIC" -Method Post -Body "ThermalGuard started" `
-                -Headers @{ "Title" = "ThermalGuard started"; "Tags" = "white_check_mark" } `
-                -TimeoutSec 5 | Out-Null
-            Write-Log "ntfy            [OK] $NTFY_URL/$NTFY_TOPIC"
-        } catch {
-            Write-Log "ntfy            [WARN] Not reachable" "WARN"
+        # Retry with backoff: a brief network hiccup right at process start
+        # (DNS cache miss, resolver timeout, reverse-proxy not warmed up yet)
+        # previously meant a single failed attempt here permanently logged
+        # ntfy as unreachable for that whole run, even though the exact same
+        # request would have succeeded seconds later.
+        $ntfyOk = $false
+        $ntfyDelays = @(2, 5, 10)
+        for ($attempt = 0; $attempt -le $ntfyDelays.Count; $attempt++) {
+            try {
+                Invoke-RestMethod -Uri "$NTFY_URL/$NTFY_TOPIC" -Method Post -Body "ThermalGuard started" `
+                    -Headers @{ "Title" = "ThermalGuard started"; "Tags" = "white_check_mark" } `
+                    -TimeoutSec 5 | Out-Null
+                Write-Log "ntfy            [OK] $NTFY_URL/$NTFY_TOPIC"
+                $ntfyOk = $true
+                break
+            } catch {
+                if ($attempt -lt $ntfyDelays.Count) {
+                    $delay = $ntfyDelays[$attempt]
+                    Write-Log "ntfy            [WARN] Attempt $($attempt + 1) failed, retrying in ${delay}s..." "WARN"
+                    Start-Sleep -Seconds $delay
+                }
+            }
+        }
+        if (-not $ntfyOk) {
+            Write-Log "ntfy            [WARN] Not reachable after $($ntfyDelays.Count + 1) attempts" "WARN"
         }
     } else {
         Write-Log "ntfy            [OFF]"
