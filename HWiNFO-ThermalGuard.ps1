@@ -19,7 +19,7 @@
 # line below. There was a stale "v2.0" hardcoded in two separate places
 # after an abandoned v2.0 attempt was reverted - this variable exists so
 # that never happens silently again. Bump this and nowhere else.
-$ScriptVersion = "1.42"
+$ScriptVersion = "1.44"
 
 # === USER CONFIGURATION ======================================================
 
@@ -28,7 +28,7 @@ $ScriptVersion = "1.42"
 # Set explicitly if your installation lives outside that allowlist, e.g. on
 # the Desktop or in a Downloads folder - those are intentionally NOT scanned
 # automatically any more (security hardening, see report finding #19).
-$HWiNFO_Path       = "C:\Users\Wuest3nFuchs\Desktop\HWInfo64\HWInfo64.exe"
+$HWiNFO_Path       = ""
 $RemoteHWInfo_Path = "C:\Tools\RemoteHWInfo_v0.5\remotehwinfo.exe"
 $Fipha_Path        = "C:\Tools\fip-ha-0.0.2.0\fipha.exe"
 
@@ -45,8 +45,8 @@ $EnableNtfy  = $false
 $EnableFipha = $true
 
 # --- ntfy ----------------------------------------------------------------------
-$NTFY_URL   = "https://REDACTED"
-$NTFY_TOPIC = "ha-system"
+$NTFY_URL   = "https://ntfy.sh"
+$NTFY_TOPIC = "thermalguard-yourname"
 
 # --- ALL-TEMPS OVERVIEW REPORT ---------------------------------------------------
 # Independent of the 4 monitored sensors above (CPU/GPU/Hotspot/Fan): this scans
@@ -716,7 +716,19 @@ function Get-AllTempsOverThreshold {
     foreach ($reading in $SensorData.readings) {
         if ([string]$reading.unit -notmatch $TempUnitPattern) { continue }
         $val = $null
-        if (-not [double]::TryParse([string]$reading.value, [ref]$val)) { continue }
+        # IMPORTANT: the simple 2-arg TryParse overload uses the current
+        # Windows culture and allows thousands-grouping. On de-AT/de-DE
+        # systems "." is the thousands separator, so a JSON value like
+        # "61.625000" gets misread as an invalidly-grouped thousands number
+        # and TryParse silently returns false - meaning every reading with
+        # a fractional value got skipped here, regardless of its actual
+        # magnitude. JSON numbers are always period-decimal by spec, so
+        # force InvariantCulture + Float-only (no grouping) explicitly.
+        if (-not [double]::TryParse(
+                [string]$reading.value,
+                [System.Globalization.NumberStyles]::Float,
+                [System.Globalization.CultureInfo]::InvariantCulture,
+                [ref]$val)) { continue }
         if ($val -lt $Threshold) { continue }
 
         # Same dedup key as elsewhere: sensorIndex+readingId identifies one
