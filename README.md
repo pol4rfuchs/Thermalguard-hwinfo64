@@ -17,6 +17,11 @@ Automatischer thermischer Schutz für Windows-Gaming-PCs.
 > (Memory-Junction-Temp, Power-Draw), die NVIDIA seit kurzem hat, fehlen für
 > AMD noch mangels bestätigter Sensor-Labels auf echter Hardware.
 
+> **Randnotiz:** Angesichts der aktuellen DRAM-Krise und der entsprechenden
+> Mondpreise lohnt sich ein noch genauerer Blick auf die eigene Hardware —
+> ThermalGuard hilft zumindest dabei, dass RAM/GPU/CPU nicht durch Überhitzung
+> vorzeitig den Geist aufgeben, wenn Ersatz gerade richtig teuer ist.
+
 ---
 
 ## Schnellstart (frischer PC, nix installiert)
