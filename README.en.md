@@ -17,11 +17,13 @@ Monitors CPU and GPU sensors in real time via HWiNFO + RemoteHWInfo and reacts t
 > (memory junction temp, power draw), which NVIDIA has recently gained, are
 > still missing for AMD for lack of confirmed sensor labels on real hardware.
 
+<!-- -->
+
 > **Side note:** Given the current DRAM crisis and the resulting sky-high
 > prices, keeping a closer eye on your hardware is worth it more than ever -
 > ThermalGuard at least helps make sure RAM/GPU/CPU don't die early from
 > overheating right when replacements are painfully expensive.
-> 
+
 ---
 
 ## Quick start (fresh PC, nothing installed)
