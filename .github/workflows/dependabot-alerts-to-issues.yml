@@ -8,7 +8,6 @@ on:
 
 permissions:
   contents: read
-  security-events: read
   issues: write
 
 jobs:
@@ -17,6 +16,18 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Check required secret is set
+        run: |
+          if [ -z "${{ secrets.DEPENDABOT_ALERTS_TOKEN }}" ]; then
+            echo "::error::DEPENDABOT_ALERTS_TOKEN secret is not set. The default"
+            echo "::error::GITHUB_TOKEN can never read the Dependabot alerts API"
+            echo "::error::(GitHub platform limitation, not a workflow bug)."
+            echo "::error::Create a fine-grained PAT scoped to this repo with"
+            echo "::error::'Dependabot alerts: Read-only' and add it as the"
+            echo "::error::DEPENDABOT_ALERTS_TOKEN repository secret."
+            exit 1
+          fi
+
       - name: Ensure labels exist
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -25,17 +36,25 @@ jobs:
           gh label create security --repo "$REPO" --color B60205 --description "Security-related issue" || true
           gh label create dependencies --repo "$REPO" --color 0366d6 --description "Dependency updates" || true
 
-      - name: Mirror open Dependabot alerts as issues
+      - name: Fetch open Dependabot alerts
+        # This call needs the fine-grained PAT - the default GITHUB_TOKEN is
+        # never accepted by the Dependabot alerts API, regardless of the
+        # `permissions:` block above (confirmed GitHub platform limitation).
+        env:
+          GH_TOKEN: ${{ secrets.DEPENDABOT_ALERTS_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh api "repos/$REPO/dependabot/alerts?state=open" --paginate > alerts.json
+          echo "Found $(jq 'length' alerts.json) open Dependabot alert(s)."
+
+      - name: Open issues for new alerts
+        # Back to the normal GITHUB_TOKEN here - creating issues only needs
+        # issues: write, which GITHUB_TOKEN already has.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
           set -e
-          gh api "repos/$REPO/dependabot/alerts?state=open" --paginate > alerts.json
-
-          count=$(jq 'length' alerts.json)
-          echo "Found $count open Dependabot alert(s)."
-
           jq -c '.[]' alerts.json | while read -r alert; do
             ghsa=$(echo "$alert" | jq -r '.security_advisory.ghsa_id')
             package=$(echo "$alert" | jq -r '.dependency.package.name')
