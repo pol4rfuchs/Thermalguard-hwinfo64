@@ -5,16 +5,13 @@
 Automatischer thermischer Schutz für Windows-Gaming-PCs.  
 Überwacht CPU- und GPU-Sensoren in Echtzeit via HWiNFO + RemoteHWInfo und reagiert bei kritischen Temperaturen in drei Eskalationsstufen: **Warnung → Programme beenden → Notabschaltung.**
 
-**Unterstützt:**
+**Hardware-Support:** 🟢 volle Unterstützung · 🟠 Basis-Monitoring · 🔴 noch nicht unterstützt
 
-[![AMD CPU](https://img.shields.io/badge/AMD_CPU-supported-brightgreen)](#gpu-profil)
-[![NVIDIA GPU](https://img.shields.io/badge/NVIDIA_GPU-supported-brightgreen)](#gpu-profil)
-[![AMD GPU](https://img.shields.io/badge/AMD_GPU-supported-brightgreen)](#gpu-profil)
-
-**Noch nicht unterstützt** (Sensor-Labels fehlen, siehe [Sensordaten beisteuern](#sensordaten-beisteuern)):
-
-[![Intel CPU](https://img.shields.io/badge/Intel_CPU-not_yet_supported-lightgrey)](#sensordaten-beisteuern)
-[![Intel Arc GPU](https://img.shields.io/badge/Intel_Arc_GPU-not_yet_supported-lightgrey)](#sensordaten-beisteuern)
+[![AMD CPU](https://img.shields.io/badge/AMD_CPU-volle_Unterst%C3%BCtzung-brightgreen?logo=amd&logoColor=white)](#gpu-profil)
+[![NVIDIA GPU](https://img.shields.io/badge/NVIDIA_GPU-volle_Unterst%C3%BCtzung-brightgreen?logo=nvidia&logoColor=white)](#gpu-profil)
+[![AMD GPU](https://img.shields.io/badge/AMD_GPU-Basis--Monitoring-orange?logo=amd&logoColor=white)](#gpu-profil)
+[![Intel CPU](https://img.shields.io/badge/Intel_CPU-nicht_unterst%C3%BCtzt-red?logo=intel&logoColor=white)](#sensordaten-beisteuern)
+[![Intel Arc GPU](https://img.shields.io/badge/Intel_Arc_GPU-nicht_unterst%C3%BCtzt-red?logo=intel&logoColor=white)](#sensordaten-beisteuern)
 
 > AMD GPU: Basis-Monitoring (Temp/Hotspot/Fan/Load) läuft. Erweiterte Sensoren
 > (Memory-Junction-Temp, Power-Draw), die NVIDIA seit kurzem hat, fehlen für
