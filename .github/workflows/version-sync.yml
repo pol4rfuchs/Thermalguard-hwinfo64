@@ -1,0 +1,78 @@
+---
+name: Version Sync
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "HWiNFO-ThermalGuard.ps1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    name: Sync README version with $ScriptVersion
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Extract $ScriptVersion from the script
+        id: script_version
+        run: |
+          VERSION=$(grep -oP '(?<=\$ScriptVersion = ")[^"]+' HWiNFO-ThermalGuard.ps1)
+          if [ -z "$VERSION" ]; then
+            echo "::error::Could not find \$ScriptVersion in HWiNFO-ThermalGuard.ps1"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Found script version: $VERSION"
+
+      - name: Sync version into README title headings
+        env:
+          VERSION: ${{ steps.script_version.outputs.version }}
+        run: |
+          for f in README.md README.en.md; do
+            if [ -f "$f" ]; then
+              sed -i -E "s/(# HWiNFO Thermal Guard v)[0-9]+(\.[0-9]+)*/\1${VERSION}/" "$f"
+            fi
+          done
+
+      - name: Check whether anything changed
+        id: diff
+        run: |
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git diff --stat
+          fi
+
+      - name: Open pull request with the fix
+        if: steps.diff.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v8
+        with:
+          commit-message: "docs: sync README version to v${{ steps.script_version.outputs.version }}"
+          title: "docs: sync README version to v${{ steps.script_version.outputs.version }}"
+          body: |
+            `HWiNFO-ThermalGuard.ps1`'s `$ScriptVersion` was changed to
+            `${{ steps.script_version.outputs.version }}`, but the README
+            title heading(s) still referenced an older version.
+
+            Opened automatically by the Version Sync workflow, to catch the
+            kind of drift that previously required a manual cleanup commit
+            (stale version strings left behind after the v2.0 revert).
+
+            Only the `# HWiNFO Thermal Guard vX.Y` title heading is touched -
+            illustrative example log lines elsewhere in the README are left
+            alone, since those document historical output, not the current
+            version.
+          branch: "auto/version-sync"
+          labels: |
+            documentation
+            automated
+          delete-branch: true
