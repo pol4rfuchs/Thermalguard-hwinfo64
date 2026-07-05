@@ -1,4 +1,4 @@
-# HWiNFO Thermal Guard v1.42
+# HWiNFO Thermal Guard v1.46
 
 [Deutsch](README.md) | **[English](README.en.md)**
 
@@ -122,7 +122,7 @@ $EnableNtfy = $true     # Push notifications via ntfy
 
 ```powershell
 $EnableNtfy = $true
-$NTFY_URL   = "https://REDACTED"
+$NTFY_URL   = "https://ntfy.your-domain.example"
 $NTFY_TOPIC = "ha-system"
 ```
 
@@ -167,6 +167,17 @@ $GPU_FanCritRPM  = 0      # Fan hard-stop: 0 RPM under load
 | GPU Crit | 85°C | 90°C | 92°C |
 | GPU Hotspot Warn | 90°C | 95°C | 97°C |
 | GPU Hotspot Crit | 95°C | 100°C | 105°C |
+
+> **Important:** these are rough orientation values, not a ready-to-use
+> configuration to copy-paste. What actually makes sense depends on **your**
+> exact CPU/GPU (Tjmax from the manufacturer's datasheet for the CPU, the
+> official maximum GPU temperature from the manufacturer for the card), set
+> with margin below that - not by picking one column wholesale. For
+> comparison: the actual configuration in this repo is tuned for a Ryzen 7
+> 5800X3D (Tjmax 90°C) and an RTX 5070 Ti (official maximum 88°C), and
+> ends up spread across all three columns rather than sitting in just one.
+> Look up/measure your own numbers instead of copying this table or the
+> repo's example values as-is.
 
 ### Timing
 
@@ -345,7 +356,7 @@ PowerShell one-liner (status of all services):
 ```powershell
 $GPUProfile = "AUTO"      # auto-detects NVIDIA
 $EnableNtfy = $true
-$NTFY_URL   = "https://REDACTED"
+$NTFY_URL   = "https://ntfy.your-domain.example"
 $NTFY_TOPIC = "ha-system"
 $EnableHWiNFO12hReset = $false   # HWiNFO Pro
 ```
