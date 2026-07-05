@@ -1,0 +1,99 @@
+name: "Bug report"
+description: "Something isn't working as documented, crashed, or behaved unexpectedly."
+title: "[bug] "
+labels:
+  - "bug"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! A few things that help a lot:
+
+        - **Redact personal info from any log paste** before submitting - your
+          ntfy server URL/topic, Windows username in file paths, or anything
+          else you wouldn't want public. This is a public repo; log lines can
+          contain things like `C:\Users\<yourname>\...` or your ntfy server
+          address. Search-and-replace them with something like `REDACTED`
+          before pasting below.
+        - Check `thermalguard.log` (`%USERPROFILE%\HWiNFO-ThermalGuard\thermalguard.log`)
+          for the relevant time window first - most of the detail we'd ask
+          for is already in there.
+        - If this is about adding support for hardware that isn't listed as
+          supported yet, use the "Sensor data" template instead - this one is
+          for something that's supposed to work already but doesn't.
+
+  - type: input
+    id: version
+    attributes:
+      label: ThermalGuard version
+      description: "See the top of thermalguard.log, or the header comment in HWiNFO-ThermalGuard.ps1"
+      placeholder: "e.g. v1.44"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: powershell-version
+    attributes:
+      label: PowerShell version
+      options:
+        - "PowerShell 5.1 (Desktop / Windows PowerShell)"
+        - "PowerShell 7.x (Core)"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: gpu-vendor
+    attributes:
+      label: GPU vendor
+      options:
+        - NVIDIA
+        - AMD
+        - Intel Arc
+        - "CPU-only setup (no GPU monitoring)"
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: input
+    id: hardware
+    attributes:
+      label: CPU / GPU model
+      placeholder: "e.g. AMD Ryzen 7 5800X3D / NVIDIA RTX 5070 Ti"
+    validations:
+      required: false
+
+  - type: textarea
+    id: expected-actual
+    attributes:
+      label: What did you expect, and what happened instead?
+      placeholder: |
+        Expected: ...
+        Actual: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro-steps
+    attributes:
+      label: Steps to reproduce
+      description: "What were you doing right before this happened? Does it happen every time or only sometimes?"
+    validations:
+      required: false
+
+  - type: textarea
+    id: log-excerpt
+    attributes:
+      label: Relevant log excerpt
+      description: "Paste the relevant lines from thermalguard.log. Remember to redact personal info first (see note above)."
+      render: text
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: consent
+    attributes:
+      label: Confirmation
+      options:
+        - label: I've checked the log excerpt above and removed any personal info (ntfy URL, Windows username in paths, etc.) before submitting.
+          required: true
