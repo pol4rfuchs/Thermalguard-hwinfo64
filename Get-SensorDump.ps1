@@ -83,7 +83,19 @@ while ((Get-Date) -lt $endTime) {
             continue
         }
         $val = $null
-        if (-not [double]::TryParse([string]$r.value, [ref]$val)) { continue }
+        # Same locale bug as HWiNFO-ThermalGuard.ps1 had: the 2-arg TryParse
+        # overload uses the current Windows culture and allows thousands-
+        # grouping. On de-AT/de-DE systems "." is the thousands separator,
+        # so RemoteHWInfo's own decimal-formatted values (it always emits
+        # "602.000000" even for whole numbers) ALL fail to parse - which is
+        # why a dump could come back with "Peak readings (0)" despite the
+        # PC clearly having working sensors. Force invariant culture so
+        # this works regardless of the machine's regional settings.
+        if (-not [double]::TryParse(
+                [string]$r.value,
+                [System.Globalization.NumberStyles]::Float,
+                [System.Globalization.CultureInfo]::InvariantCulture,
+                [ref]$val)) { continue }
 
         $key = "$($r.sensorIndex)|$($r.readingId)"
         if (-not $peakValues.ContainsKey($key) -or $val -gt $peakValues[$key].PeakValue) {
