@@ -1,0 +1,203 @@
+name: "Bug report / Sensor data contribution"
+description: "Report something not working as documented, OR share HWiNFO sensor readings to add/verify hardware support. One form for both, so nothing gets missed by picking the wrong template."
+title: "[thermalguard] "
+labels:
+  - "bug"
+  - "sensor-data"
+  - "help wanted"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting or contributing! This form covers two different
+        things - pick the "Report type" below and just fill in the section
+        that applies, the rest is fine to leave blank.
+
+        **If this is a bug report:**
+        - **Redact personal info from any log paste** before submitting - your
+          ntfy server URL/topic, Windows username in file paths, or anything
+          else you wouldn't want public. This is a public repo; log lines can
+          contain things like `C:\Users\<yourname>\...` or your ntfy server
+          address. Search-and-replace them with something like `REDACTED`
+          before pasting below.
+        - Check `thermalguard.log` (`%USERPROFILE%\HWiNFO-ThermalGuard\thermalguard.log`)
+          for the relevant time window first - most of the detail we'd ask
+          for is already in there.
+
+        **If this is sensor data for hardware support:**
+        There are two ways this helps, depending on your hardware:
+        - **Not supported yet** (Intel CPU, Intel Arc GPU): we need real sensor
+          labels from your system to add support at all, since these use
+          completely different sensor names than AMD/NVIDIA.
+        - **Should work, but unverified** (AMD AM5 CPUs, NVIDIA RTX 20/30/40,
+          AMD RX 6000/7000): these reuse the same sensor labels as already-tested
+          hardware, so they probably work - but nobody's confirmed it on real
+          hardware yet. Your dump moves these from "should work" to "confirmed"
+          in the README.
+
+        This takes about 2-3 minutes:
+        1. Make sure HWiNFO64 + RemoteHWInfo are running (same setup ThermalGuard needs)
+        2. Download and run `Get-SensorDump.ps1` from the repo's root folder
+        3. It samples for at least 120 seconds - start a game or some load
+           partway through if you can, so both idle and load values get
+           captured, not just idle
+        4. Paste the output below, or attach the generated `.txt` file
+
+        The script only reads your local sensor values (temps, clocks, power,
+        fans) - no personal info, no auto-upload. Please review the output
+        yourself before pasting, same as with any data you share online.
+
+  - type: dropdown
+    id: report-type
+    attributes:
+      label: Report type
+      description: "What is this issue about?"
+      options:
+        - "Bug report"
+        - "Sensor data - hardware not supported yet"
+        - "Sensor data - verify unverified/untested hardware"
+        - "Both / other"
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: "---\n### Bug report fields\nFill in if Report type above is \"Bug report\" (or \"Both\")."
+
+  - type: input
+    id: version
+    attributes:
+      label: ThermalGuard version
+      description: "See the top of thermalguard.log, or the header comment in HWiNFO-ThermalGuard.ps1"
+      placeholder: "e.g. v1.44"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: powershell-version
+    attributes:
+      label: PowerShell version
+      options:
+        - "PowerShell 5.1 (Desktop / Windows PowerShell)"
+        - "PowerShell 7.x (Core)"
+        - "Not sure"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: gpu-vendor
+    attributes:
+      label: GPU vendor
+      options:
+        - NVIDIA
+        - AMD
+        - Intel Arc
+        - "CPU-only setup (no GPU monitoring)"
+        - Other / not sure
+    validations:
+      required: false
+
+  - type: input
+    id: hardware
+    attributes:
+      label: CPU / GPU model
+      placeholder: "e.g. AMD Ryzen 7 5800X3D / NVIDIA RTX 5070 Ti"
+    validations:
+      required: false
+
+  - type: textarea
+    id: expected-actual
+    attributes:
+      label: What did you expect, and what happened instead?
+      placeholder: |
+        Expected: ...
+        Actual: ...
+    validations:
+      required: false
+
+  - type: textarea
+    id: repro-steps
+    attributes:
+      label: Steps to reproduce
+      description: "What were you doing right before this happened? Does it happen every time or only sometimes?"
+    validations:
+      required: false
+
+  - type: textarea
+    id: log-excerpt
+    attributes:
+      label: Relevant log excerpt
+      description: "Paste the relevant lines from thermalguard.log. Remember to redact personal info first (see note above)."
+      render: text
+    validations:
+      required: false
+
+  - type: markdown
+    attributes:
+      value: "---\n### Sensor data fields\nFill in if Report type above is a \"Sensor data\" option (or \"Both\")."
+
+  - type: dropdown
+    id: hardware-type
+    attributes:
+      label: What hardware is the sensor data for?
+      description: "Not supported yet vs. should-work-but-unverified - see the intro above."
+      options:
+        - "Intel CPU (not supported yet)"
+        - "Intel Arc GPU (not supported yet)"
+        - "AMD CPU - AM5 / Ryzen 7000-9000 (unverified)"
+        - "NVIDIA GPU - RTX 20/30/40, Turing-Ada (unverified extended sensors)"
+        - "AMD GPU - RX 6000/7000, RDNA2/3 (unverified)"
+        - "Other / not sure"
+    validations:
+      required: false
+
+  - type: input
+    id: cpu-model
+    attributes:
+      label: CPU model
+      placeholder: "e.g. Intel Core i7-14700K / AMD Ryzen 9 9950X3D"
+    validations:
+      required: false
+
+  - type: input
+    id: gpu-model
+    attributes:
+      label: GPU model
+      placeholder: "e.g. AMD RX 9070 XT / Intel Arc B580 / RTX 4080"
+    validations:
+      required: false
+
+  - type: input
+    id: os-version
+    attributes:
+      label: Windows version
+      placeholder: "e.g. Windows 11 24H2"
+    validations:
+      required: false
+
+  - type: input
+    id: hwinfo-version
+    attributes:
+      label: HWiNFO / RemoteHWInfo version
+      placeholder: "e.g. HWiNFO 8.06, RemoteHWInfo v0.5"
+    validations:
+      required: false
+
+  - type: textarea
+    id: sensor-dump
+    attributes:
+      label: Sensor dump
+      description: "Paste the output of Get-SensorDump.ps1 here (or leave empty and attach the .txt file to this issue instead)."
+      render: text
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: consent
+    attributes:
+      label: Confirmation
+      options:
+        - label: I've checked the log excerpt above (if any) and removed any personal info (ntfy URL, Windows username in paths, etc.) before submitting.
+          required: true
+        - label: I've reviewed the sensor dump above (if any) and I'm okay sharing it publicly in this issue.
+          required: true

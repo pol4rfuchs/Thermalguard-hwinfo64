@@ -554,7 +554,7 @@ Start-HWiNFO-Remote.vbs (shell:startup)
 Intel CPUs, AMD GPUs (extended monitoring), and Intel Arc GPUs are currently
 missing because the exact HWiNFO sensor labels need to be confirmed on real
 hardware instead of guessed. If you have one of these, you can help in
-2-3 minutes: [open an issue using the sensor-data template](../../issues/new?template=sensor-data-request.yml),
+2-3 minutes: [open the issue form](../../issues/new?template=report.yml),
 run `Get-SensorDump.ps1` (samples for 120s, ideally with some
 load/a game running partway through), and paste the output.
 
