@@ -19,7 +19,7 @@
 # line below. There was a stale "v2.0" hardcoded in two separate places
 # after an abandoned v2.0 attempt was reverted - this variable exists so
 # that never happens silently again. Bump this and nowhere else.
-$ScriptVersion = "1.42"
+$ScriptVersion = "1.46"
 
 # --- TLS (GLOBAL, EARLY) -----------------------------------------------------
 # PowerShell 5.1 / .NET Framework does not always default to TLS 1.2, which
@@ -62,17 +62,52 @@ $EnableFipha = $true
 
 # --- ntfy ----------------------------------------------------------------------
 $NTFY_URL   = "https://ntfy.sh"
-$NTFY_TOPIC = "thermalguard-yourname"
+$NTFY_TOPIC = "ha-thermalguard"
 
 # --- ALL-TEMPS OVERVIEW REPORT ---------------------------------------------------
 # Independent of the 4 monitored sensors above (CPU/GPU/Hotspot/Fan): this scans
-# EVERY temperature reading HWiNFO reports (all cores, all VRM/chipset/SSD/etc.
-# sensors it exposes) and sends one summary listing everything currently over
-# $AllTempsThreshold. Sent once at script start, then again only when the SET of
-# sensors over the threshold changes (something new crosses over, or drops back
-# under) - not on every poll, to avoid spam.
+# EVERY temperature reading HWiNFO reports (all cores, VRM/chipset/SSD/mainboard/
+# RAM/etc. sensors it exposes) and sends one summary of what's currently in
+# alert state. Sent once at script start, then again only when the SET of
+# sensors in alert state changes - not on every poll, to avoid spam.
+#
+# Two categories, each with its own TRACK and REPORT threshold:
+#   - CPU/GPU runs hotter under normal load, so its thresholds are higher.
+#   - Mainboard/RAM sensors sitting well below their normal operating range
+#     even at 55 C is already noteworthy, so their thresholds are lower.
+# Anything that matches neither pattern (SSD, generic VRM, etc.) falls back
+# to the CPU/GPU thresholds, so nothing that used to be covered by the old
+# single-threshold version silently drops out of the report.
+#
+# TRACK vs REPORT is hysteresis, not two separate features: an alert fires
+# once a sensor crosses its REPORT threshold, but it stays "in alert" (and
+# won't send a "back to normal" message) until it drops back below the
+# lower TRACK threshold. Without this, a value hovering right at the report
+# line (e.g. 74/76/74/76 C) would flip alert/clear/alert every single poll -
+# exactly the toast/ntfy spam this is meant to avoid.
 $EnableAllTempsReport = $true
-$AllTempsThreshold    = 60
+
+$AllTempsTrackThreshold_CpuGpu  = 60
+$AllTempsReportThreshold_CpuGpu = 75
+
+$AllTempsTrackThreshold_Board   = 50
+$AllTempsReportThreshold_Board  = 55
+
+# Label pattern that routes a reading to the CPU/GPU thresholds. Checked
+# first, so "GPU Memory Junction Temperature" (contains "Memory") correctly
+# lands here and not in the board/RAM bucket below.
+$CpuGpuLabelPattern   = '(?i)(\bcpu\b|\bgpu\b)'
+
+# Label pattern that routes a reading to the mainboard/RAM thresholds. Not
+# yet confirmed against a real json.json dump showing actual mainboard/RAM
+# sensor labels (that varies a lot by motherboard vendor) - adjust this
+# regex if your board's sensors don't get picked up here. Common candidates
+# covered: "Motherboard"/"Mainboard", "System" (many boards label their main
+# board-area sensor this way), "PCH" (chipset), "Chipset", "DIMM", "RAM",
+# "Memory" (but GPU Memory Junction is excluded by the CPU/GPU check above
+# running first).
+$BoardRamLabelPattern = '(?i)(mainboard|motherboard|\bsystem\b|\bpch\b|chipset|dimm|\bram\b|memory)'
+
 # HWiNFO/RemoteHWInfo's JSON "unit" field for temperature readings. Confirmed via
 # the self-test log line (search "unit=" in thermalguard.log after first run,
 # Write-Log around the sensor self-test). Adjust this regex if your log shows a
@@ -573,6 +608,17 @@ if ($EnableGPU) {
     }
 }
 
+# Labels already covered by the dedicated per-sensor Warn/Crit timers above
+# (CPU Tctl/Tdie, GPU Temperature, GPU Hotspot, GPU Memory Junction) get
+# excluded from the generic All-Temps-Report scan further down. Those four
+# already have their own staged Warn -> Crit -> kill -> shutdown escalation
+# with proper hysteresis; running them through the generic scan too would
+# just mean two different alerts firing for the exact same sensor at two
+# different thresholds.
+$script:DedicatedTempLabels = @(
+    $Sensors | Where-Object { $_.Type -eq "temp" } | ForEach-Object { $_.SensorMatch }
+)
+
 # === SOFTWARE CHECK ===========================================================
 
 function Test-Requirements {
@@ -741,9 +787,37 @@ function Send-Ntfy {
 }
 
 $script:LastOverThresholdKey = $null
+$script:TempAlertState       = @{}
 
-function Get-AllTempsOverThreshold {
-    param($SensorData, [double]$Threshold)
+function Get-TempCategory {
+    param([string]$Label)
+
+    if ($Label -match $CpuGpuLabelPattern) {
+        return [PSCustomObject]@{
+            Name  = "CPU/GPU"
+            Track = $AllTempsTrackThreshold_CpuGpu
+            Report = $AllTempsReportThreshold_CpuGpu
+        }
+    }
+    if ($Label -match $BoardRamLabelPattern) {
+        return [PSCustomObject]@{
+            Name  = "Board/RAM"
+            Track = $AllTempsTrackThreshold_Board
+            Report = $AllTempsReportThreshold_Board
+        }
+    }
+    # Fallback for anything unclassified (SSD, generic VRM, etc.) - use the
+    # CPU/GPU thresholds as the generic default rather than dropping these
+    # readings from the report entirely.
+    return [PSCustomObject]@{
+        Name  = "Other"
+        Track = $AllTempsTrackThreshold_CpuGpu
+        Report = $AllTempsReportThreshold_CpuGpu
+    }
+}
+
+function Get-AllTempsInAlertState {
+    param($SensorData)
 
     $seen   = @{}
     $result = @()
@@ -763,7 +837,6 @@ function Get-AllTempsOverThreshold {
                 [System.Globalization.NumberStyles]::Float,
                 [System.Globalization.CultureInfo]::InvariantCulture,
                 [ref]$val)) { continue }
-        if ($val -lt $Threshold) { continue }
 
         # Same dedup key as elsewhere: sensorIndex+readingId identifies one
         # physical reading, HWiNFO/RemoteHWInfo can list it twice.
@@ -771,13 +844,36 @@ function Get-AllTempsOverThreshold {
         if ($seen.ContainsKey($dedupKey)) { continue }
         $seen[$dedupKey] = $true
 
+        # Already handled by the dedicated Warn/Crit system with its own
+        # (lower, more conservative) thresholds and staged escalation -
+        # skip here so it doesn't also fire through the generic report.
+        if ($script:DedicatedTempLabels -contains $reading.labelOriginal) { continue }
+
         $label = if ($reading.labelUser) { $reading.labelUser } else { $reading.labelOriginal }
-        $result += [PSCustomObject]@{
-            Label = $label
-            Value = $val
+        $cat = Get-TempCategory -Label $label
+
+        # Hysteresis: enter alert state at the (higher) report threshold,
+        # only leave alert state once back below the (lower) track
+        # threshold. Prevents flapping when a value hovers right around
+        # the report line.
+        $wasAlert = $script:TempAlertState.ContainsKey($dedupKey) -and $script:TempAlertState[$dedupKey]
+        $isAlert = $wasAlert
+        if (-not $wasAlert -and $val -ge $cat.Report) {
+            $isAlert = $true
+        } elseif ($wasAlert -and $val -lt $cat.Track) {
+            $isAlert = $false
+        }
+        $script:TempAlertState[$dedupKey] = $isAlert
+
+        if ($isAlert) {
+            $result += [PSCustomObject]@{
+                Label    = $label
+                Value    = $val
+                Category = $cat.Name
+            }
         }
     }
-    return $result | Sort-Object Label
+    return $result | Sort-Object Category, Label
 }
 
 function Get-CurrentGPUPowerLine {
@@ -793,6 +889,7 @@ function Get-CurrentGPUPowerLine {
     if (-not $reading) { return $null }
 
     return "GPU Power: $($reading.value) W"
+
 }
 
 function Invoke-AllTempsReportCheck {
@@ -800,24 +897,24 @@ function Invoke-AllTempsReportCheck {
 
     if (-not $EnableAllTempsReport) { return }
 
-    $overList = Get-AllTempsOverThreshold -SensorData $SensorData -Threshold $AllTempsThreshold
-    $currentKey = ($overList | ForEach-Object { "$($_.Label)=$($_.Value)" }) -join ';'
+    $alertList = Get-AllTempsInAlertState -SensorData $SensorData
+    $currentKey = ($alertList | ForEach-Object { "$($_.Label)=$($_.Value)" }) -join ';'
 
     if ($currentKey -eq $script:LastOverThresholdKey) { return }
     $script:LastOverThresholdKey = $currentKey
 
-    if ($overList.Count -eq 0) {
-        Write-Log "All-temps report: back under $AllTempsThreshold C on all sensors"
-        Send-Alert -Title "Temps back under $AllTempsThreshold C" -Body "No sensor above threshold anymore." -Priority "default"
+    if ($alertList.Count -eq 0) {
+        Write-Log "All-temps report: back under thresholds on all sensors"
+        Send-Alert -Title "Temps back to normal" -Body "No sensor above its report threshold anymore." -Priority "default"
         return
     }
 
-    $lines = $overList | ForEach-Object { "$($_.Label): $($_.Value) C" }
+    $lines = $alertList | ForEach-Object { "[$($_.Category)] $($_.Label): $($_.Value) C" }
     $powerLine = Get-CurrentGPUPowerLine -SensorData $SensorData
     if ($powerLine) { $lines += $powerLine }
     $body  = $lines -join "`n"
-    Write-Log "All-temps report: $($overList.Count) sensor(s) over $AllTempsThreshold C -> $($lines -join ' | ')"
-    Send-Alert -Title "Temps over $AllTempsThreshold C ($($overList.Count))" -Body $body -Priority "default"
+    Write-Log "All-temps report: $($alertList.Count) sensor(s) over threshold -> $($lines -join ' | ')"
+    Send-Alert -Title "Temps over threshold ($($alertList.Count))" -Body $body -Priority "default"
 }
 
 $script:PerfLimitLastState = @{}
@@ -1107,7 +1204,7 @@ function Start-ThermalGuard {
     Write-Log "CPU Monitoring:  $(if ($EnableCPU) {'ON'} else {'OFF'})"
     Write-Log "GPU Monitoring:  $(if ($EnableGPU) {'ON'} else {'OFF'})"
     Write-Log "ntfy:            $(if ($EnableNtfy) {'ON'} else {'OFF'})"
-    Write-Log "All-temps report: $(if ($EnableAllTempsReport) {"ON (>$AllTempsThreshold C)"} else {'OFF'})"
+    Write-Log "All-temps report: $(if ($EnableAllTempsReport) {"ON (CPU/GPU >$AllTempsReportThreshold_CpuGpu C, Board/RAM >$AllTempsReportThreshold_Board C)"} else {'OFF'})"
     Write-Log "fipha:           $(if ($EnableFipha) {'ON'} else {'OFF'})"
     Write-Log "Sensors:         $($Sensors.Count) configured"
     Write-Log "Polling:         every ${PollInterval}s"
