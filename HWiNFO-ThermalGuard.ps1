@@ -62,7 +62,7 @@ $EnableFipha = $true
 
 # --- ntfy ----------------------------------------------------------------------
 $NTFY_URL   = "https://ntfy.sh"
-$NTFY_TOPIC = "thermalguard-yourname"
+$NTFY_TOPIC = "ha-thermalguard-yourname"
 
 # --- ALL-TEMPS OVERVIEW REPORT ---------------------------------------------------
 # Independent of the 4 monitored sensors above (CPU/GPU/Hotspot/Fan): this scans
@@ -169,7 +169,7 @@ $PerfLimitFlagsToWatch = @(
 # very first alert still goes out immediately (nothing to wait on yet), but
 # any further informational changes within the cooldown get batched into
 # the next digest instead of firing individually.
-$InfoAlertCooldownMinutes = 15
+$InfoAlertCooldownMinutes = 45
 
 # --- TIMING --------------------------------------------------------------------
 $PollInterval = 5
@@ -1073,7 +1073,30 @@ function Find-SensorValueSingle {
         $script:LoggedSensorMatchWarnings[$Match] = $true
     }
     if ($m.Count -eq 0) { return $null }
-    try { return [double]$m[0].value } catch { return $null }
+    # SAFETY-CRITICAL FIX: this feeds the dedicated CPU/GPU Warn/Crit/
+    # Stage2/Stage3 shutdown comparisons. A plain [double] cast on a STRING
+    # value goes through .NET's Convert.ToDouble internally, which uses the
+    # current Windows culture - on de-AT/de-DE systems (where "." is the
+    # thousands separator) a value like "100.19" can get its decimal point
+    # silently swallowed and read back as 10019. That garbled, hugely
+    # inflated number is always >= any sane Crit threshold, which can
+    # trigger a completely spurious emergency shutdown on a totally normal
+    # temperature. If the value from ConvertFrom-Json is already a native
+    # numeric type (the common case), casting it is a no-op and stays safe;
+    # only the string case needs the explicit invariant-culture parse.
+    $rawValue = $m[0].value
+    if ($rawValue -is [double] -or $rawValue -is [int] -or $rawValue -is [long] -or $rawValue -is [decimal]) {
+        return [double]$rawValue
+    }
+    $parsed = $null
+    if ([double]::TryParse(
+            [string]$rawValue,
+            [System.Globalization.NumberStyles]::Float,
+            [System.Globalization.CultureInfo]::InvariantCulture,
+            [ref]$parsed)) {
+        return $parsed
+    }
+    return $null
 }
 
 function Find-SensorValue {
