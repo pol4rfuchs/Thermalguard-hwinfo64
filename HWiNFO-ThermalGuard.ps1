@@ -19,7 +19,7 @@
 # line below. There was a stale "v2.0" hardcoded in two separate places
 # after an abandoned v2.0 attempt was reverted - this variable exists so
 # that never happens silently again. Bump this and nowhere else.
-$ScriptVersion = "1.46"
+$ScriptVersion = "1.47"
 
 # --- TLS (GLOBAL, EARLY) -----------------------------------------------------
 # PowerShell 5.1 / .NET Framework does not always default to TLS 1.2, which
@@ -62,7 +62,7 @@ $EnableFipha = $true
 
 # --- ntfy ----------------------------------------------------------------------
 $NTFY_URL   = "https://ntfy.sh"
-$NTFY_TOPIC = "ha-thermalguard"
+$NTFY_TOPIC = "thermalguard-yourname"
 
 # --- ALL-TEMPS OVERVIEW REPORT ---------------------------------------------------
 # Independent of the 4 monitored sensors above (CPU/GPU/Hotspot/Fan): this scans
@@ -154,6 +154,22 @@ $PerfLimitFlagsToWatch = @(
     "Performance Limit - Reliability Voltage"
     "Performance Limit - Max Operating Voltage"
 )
+
+# --- INFO-ALERT DIGEST (RATE LIMIT) ---------------------------------------------
+# The All-Temps-Report and Perf-Limit checks above are informational, not
+# safety-critical (the dedicated CPU/GPU Warn/Crit sensors with their
+# Stage2/Stage3 kill/shutdown escalation are separate and NOT affected by
+# this - those always fire immediately, on purpose, since delaying a
+# "shutdown imminent" notice would defeat the point).
+#
+# Without rate limiting, a value hovering near a threshold, or several
+# different sensors crossing at different times, can produce a toast/ntfy
+# message every few minutes indefinitely. Instead, informational alerts are
+# queued and sent as a single digest at most once per cooldown window - the
+# very first alert still goes out immediately (nothing to wait on yet), but
+# any further informational changes within the cooldown get batched into
+# the next digest instead of firing individually.
+$InfoAlertCooldownMinutes = 15
 
 # --- TIMING --------------------------------------------------------------------
 $PollInterval = 5
@@ -566,7 +582,18 @@ if (-not $GPUProfiles.ContainsKey($GPUProfile)) {
 $Sensors = @(
     @{
         Name          = "CPU Tctl/Tdie"
-        SensorMatch   = "CPU (Tctl/Tdie)"
+        # Fallback chain, tried in order until one resolves. "CPU (Tctl/Tdie)"
+        # is AMD Ryzen-specific and confirmed working; the rest are common
+        # generic labels HWiNFO uses on Intel CPUs, NOT yet confirmed against
+        # a real Intel sensor dump (see the "Sensor data" issue template -
+        # this is exactly what it's for). Adjust/reorder once confirmed.
+        SensorMatch   = @(
+            "CPU (Tctl/Tdie)"
+            "CPU Package"
+            "CPU Package Temperature"
+            "CPU Die"
+            "CPU Core Max"
+        )
         WarnThreshold = $CPU_WarnTemp
         CritThreshold = $CPU_CritTemp
         Type          = "temp"
@@ -892,6 +919,34 @@ function Get-CurrentGPUPowerLine {
 
 }
 
+$script:PendingInfoLines    = @()
+$script:LastInfoAlertSentAt = $null
+
+function Queue-InfoAlert {
+    param([string]$Line)
+    $script:PendingInfoLines += $Line
+    Write-Log "Info-alert queued for next digest: $Line"
+}
+
+function Invoke-InfoAlertDigestFlush {
+    if ($script:PendingInfoLines.Count -eq 0) { return }
+
+    $elapsedMin = if ($script:LastInfoAlertSentAt) {
+        ((Get-Date) - $script:LastInfoAlertSentAt).TotalMinutes
+    } else {
+        # Never sent one yet - go out immediately, nothing to wait on.
+        [double]::MaxValue
+    }
+    if ($elapsedMin -lt $InfoAlertCooldownMinutes) { return }
+
+    $count = $script:PendingInfoLines.Count
+    $body  = $script:PendingInfoLines -join "`n"
+    Write-Log "Info-alert digest sent: $count item(s) -> $($script:PendingInfoLines -join ' | ')"
+    Send-Alert -Title "Status update ($count change$(if ($count -ne 1) {'s'}))" -Body $body -Priority "default"
+    $script:PendingInfoLines    = @()
+    $script:LastInfoAlertSentAt = Get-Date
+}
+
 function Invoke-AllTempsReportCheck {
     param($SensorData)
 
@@ -905,16 +960,16 @@ function Invoke-AllTempsReportCheck {
 
     if ($alertList.Count -eq 0) {
         Write-Log "All-temps report: back under thresholds on all sensors"
-        Send-Alert -Title "Temps back to normal" -Body "No sensor above its report threshold anymore." -Priority "default"
+        Queue-InfoAlert -Line "Temps back to normal: no sensor above its report threshold anymore."
         return
     }
 
     $lines = $alertList | ForEach-Object { "[$($_.Category)] $($_.Label): $($_.Value) C" }
     $powerLine = Get-CurrentGPUPowerLine -SensorData $SensorData
     if ($powerLine) { $lines += $powerLine }
-    $body  = $lines -join "`n"
+    $body  = $lines -join "; "
     Write-Log "All-temps report: $($alertList.Count) sensor(s) over threshold -> $($lines -join ' | ')"
-    Send-Alert -Title "Temps over threshold ($($alertList.Count))" -Body $body -Priority "default"
+    Queue-InfoAlert -Line "Temps over threshold ($($alertList.Count)): $body"
 }
 
 $script:PerfLimitLastState = @{}
@@ -947,10 +1002,10 @@ function Invoke-PerfLimitCheck {
 
         if ($isActive) {
             Write-Log "$flagName ACTIVE (GPU throttling)" "WARN"
-            Send-Alert -Title "GPU Throttle: $flagName" -Body "GPU is currently limited by this factor." -Priority "high"
+            Queue-InfoAlert -Line "GPU throttle active: $flagName"
         } else {
             Write-Log "$flagName cleared"
-            Send-Alert -Title "$flagName cleared" -Body "GPU no longer limited by this factor." -Priority "default"
+            Queue-InfoAlert -Line "GPU throttle cleared: $flagName"
         }
     }
 }
@@ -960,6 +1015,7 @@ function Send-Alert {
     Send-Toast -Title $Title -Body $Body
     Send-Ntfy  -Title $Title -Body $Body -Priority $Priority
 }
+
 
 # === SENSOR READING ===========================================================
 
@@ -972,7 +1028,9 @@ function Get-HWiNFOSensors {
     }
 }
 
-function Find-SensorValue {
+$script:LoggedFallbackUsed = @{}
+
+function Find-SensorValueSingle {
     param($SensorData, [string]$Match, $PreferredSensorIndex = $null, [string]$PreferredUnit = $null)
 
     $exactMatches   = @()
@@ -1016,6 +1074,31 @@ function Find-SensorValue {
     }
     if ($m.Count -eq 0) { return $null }
     try { return [double]$m[0].value } catch { return $null }
+}
+
+function Find-SensorValue {
+    param($SensorData, $Match, $PreferredSensorIndex = $null, [string]$PreferredUnit = $null, [string]$SensorDisplayName = $null)
+
+    # $Match can be a single label string, or an array of candidate labels
+    # tried in priority order (e.g. AMD's "CPU (Tctl/Tdie)" first, then
+    # generic Intel-style fallbacks). A plain string is just treated as a
+    # one-element list, so existing single-label sensors need no changes.
+    $candidates = if ($Match -is [array]) { $Match } else { @($Match) }
+
+    for ($i = 0; $i -lt $candidates.Count; $i++) {
+        $value = Find-SensorValueSingle -SensorData $SensorData -Match $candidates[$i] -PreferredSensorIndex $PreferredSensorIndex -PreferredUnit $PreferredUnit
+        if ($null -ne $value) {
+            if ($i -gt 0) {
+                $logKey = "$SensorDisplayName|$($candidates[$i])"
+                if (-not $script:LoggedFallbackUsed[$logKey]) {
+                    Write-Log "Sensor fallback: '$SensorDisplayName' - primary label '$($candidates[0])' not found, using fallback '$($candidates[$i])'"
+                    $script:LoggedFallbackUsed[$logKey] = $true
+                }
+            }
+            return $value
+        }
+    }
+    return $null
 }
 
 function Find-GPULoad {
@@ -1278,6 +1361,7 @@ function Start-ThermalGuard {
 
         Invoke-AllTempsReportCheck -SensorData $sensorData
         Invoke-PerfLimitCheck -SensorData $sensorData
+        Invoke-InfoAlertDigestFlush
 
         # Report finding #10: explicit self-test on the first successful
         # poll so an operator can verify exactly which sensor each
@@ -1287,26 +1371,35 @@ function Start-ThermalGuard {
             foreach ($sensor in $Sensors) {
                 if ($sensor.Group -eq "CPU" -and -not $EnableCPU) { continue }
                 if ($sensor.Group -eq "GPU" -and -not $EnableGPU) { continue }
-                $candidates = $sensorData.readings | Where-Object {
-                    $_.labelOriginal -eq $sensor.SensorMatch -or $_.labelUser -eq $sensor.SensorMatch -or
-                    $_.labelOriginal -like "*$($sensor.SensorMatch)*" -or $_.labelUser -like "*$($sensor.SensorMatch)*"
+
+                $matchCandidates = if ($sensor.SensorMatch -is [array]) { $sensor.SensorMatch } else { @($sensor.SensorMatch) }
+                $reading = $null
+                $matchedCandidate = $null
+                foreach ($candidate in $matchCandidates) {
+                    $candidates = $sensorData.readings | Where-Object {
+                        $_.labelOriginal -eq $candidate -or $_.labelUser -eq $candidate -or
+                        $_.labelOriginal -like "*$candidate*" -or $_.labelUser -like "*$candidate*"
+                    }
+                    # Mirror Find-SensorValue's disambiguation order so the self-test
+                    # log shows exactly the reading that will actually be monitored,
+                    # not just whichever one happened to come first in the JSON.
+                    if ($candidates.Count -gt 1 -and $sensor.PreferredSensorIndex) {
+                        $byIndex = $candidates | Where-Object { $_.sensorIndex -eq $sensor.PreferredSensorIndex }
+                        if ($byIndex) { $candidates = $byIndex }
+                    }
+                    if ($candidates.Count -gt 1 -and $sensor.Type -eq "fan") {
+                        $byUnit = $candidates | Where-Object { [string]$_.unit -eq "RPM" }
+                        if ($byUnit) { $candidates = $byUnit }
+                    }
+                    $reading = $candidates | Select-Object -First 1
+                    if ($reading) { $matchedCandidate = $candidate; break }
                 }
-                # Mirror Find-SensorValue's disambiguation order so the self-test
-                # log shows exactly the reading that will actually be monitored,
-                # not just whichever one happened to come first in the JSON.
-                if ($candidates.Count -gt 1 -and $sensor.PreferredSensorIndex) {
-                    $byIndex = $candidates | Where-Object { $_.sensorIndex -eq $sensor.PreferredSensorIndex }
-                    if ($byIndex) { $candidates = $byIndex }
-                }
-                if ($candidates.Count -gt 1 -and $sensor.Type -eq "fan") {
-                    $byUnit = $candidates | Where-Object { [string]$_.unit -eq "RPM" }
-                    if ($byUnit) { $candidates = $byUnit }
-                }
-                $reading = $candidates | Select-Object -First 1
                 if ($reading) {
-                    Write-Log "  $($sensor.Name) -> labelOriginal='$($reading.labelOriginal)' sensorIndex=$($reading.sensorIndex) readingId=$($reading.readingId) unit=$($reading.unit) value=$($reading.value)"
+                    $fallbackNote = if ($matchedCandidate -ne $matchCandidates[0]) { " (fallback: primary '$($matchCandidates[0])' not found)" } else { "" }
+                    Write-Log "  $($sensor.Name) -> labelOriginal='$($reading.labelOriginal)' sensorIndex=$($reading.sensorIndex) readingId=$($reading.readingId) unit=$($reading.unit) value=$($reading.value)$fallbackNote"
                 } else {
-                    Write-Log "  $($sensor.Name) -> NO MATCH for '$($sensor.SensorMatch)'" "WARN"
+                    $matchDisplay = $matchCandidates -join "' / '"
+                    Write-Log "  $($sensor.Name) -> NO MATCH for '$matchDisplay'" "WARN"
                 }
             }
             Write-Log "=== End self-test ==="
@@ -1321,14 +1414,15 @@ function Start-ThermalGuard {
 
             $sName = $sensor.Name
             $unitHint = if ($sensor.Type -eq "fan") { "RPM" } else { $null }
-            $value = Find-SensorValue -SensorData $sensorData -Match $sensor.SensorMatch -PreferredSensorIndex $sensor.PreferredSensorIndex -PreferredUnit $unitHint
+            $value = Find-SensorValue -SensorData $sensorData -Match $sensor.SensorMatch -PreferredSensorIndex $sensor.PreferredSensorIndex -PreferredUnit $unitHint -SensorDisplayName $sName
 
             if ($null -eq $value) {
                 $missingSensorCounts[$sName] = [int]$missingSensorCounts[$sName] + 1
                 if ($missingSensorCounts[$sName] -ge $MissingSensorAlertAfterPolls) {
                     $lastMissingAlert = $missingSensorLastAlert[$sName]
                     if (($null -eq $lastMissingAlert) -or (((Get-Date) - $lastMissingAlert).TotalMinutes -ge $MissingSensorAlertIntervalMinutes)) {
-                        Write-Log "Sensor missing: $sName ('$($sensor.SensorMatch)')" "ERROR"
+                        $matchDisplay = if ($sensor.SensorMatch -is [array]) { $sensor.SensorMatch -join "' / '" } else { $sensor.SensorMatch }
+                        Write-Log "Sensor missing: $sName ('$matchDisplay')" "ERROR"
                         Send-Alert -Title "Sensor missing" -Body "$sName not found" -Priority "urgent"
                         $missingSensorLastAlert[$sName] = Get-Date
                     }
@@ -1349,7 +1443,11 @@ function Start-ThermalGuard {
             if ($sensor.Type -eq "temp") {
                 if ($value -ge $sensor.WarnThreshold -and -not $warnSent[$sName]) {
                     Write-Log "${sName}: WARNING ${value} degrees (threshold: $($sensor.WarnThreshold))" "WARN"
-                    Send-Alert -Title "$sName warning" -Body "${value} degrees reached" -Priority "high"
+                    # Warn is informational only - Crit detection below reads
+                    # $value directly, not this flag, so queuing this instead
+                    # of sending immediately does not delay the Stage2/Stage3
+                    # kill/shutdown escalation in any way.
+                    Queue-InfoAlert -Line "$sName warning: ${value} degrees reached (threshold: $($sensor.WarnThreshold))"
                     $warnSent[$sName] = $true
                 }
                 $isCritical = ($value -ge $sensor.CritThreshold)
@@ -1358,7 +1456,9 @@ function Start-ThermalGuard {
                 if ($null -ne $gpuLoad -and $gpuLoad -ge $GPULoadThreshold) {
                     if ($value -le $sensor.WarnThreshold -and $value -gt $sensor.CritThreshold -and -not $warnSent[$sName]) {
                         Write-Log "${sName}: WARNING ${value} RPM at ${gpuLoad}% load" "WARN"
-                        Send-Alert -Title "$sName warning" -Body "${value} RPM at ${gpuLoad}% load" -Priority "high"
+                        # Same reasoning as the temp warn above: purely
+                        # informational, Crit detection is independent of it.
+                        Queue-InfoAlert -Line "$sName warning: ${value} RPM at ${gpuLoad}% load"
                         $warnSent[$sName] = $true
                     }
                     $isCritical = ($value -le $sensor.CritThreshold)
