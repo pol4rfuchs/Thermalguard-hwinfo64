@@ -224,6 +224,13 @@ $MaxLogSizeMB = 10
 # === LOGGING (must be defined before anything else can call it) =============
 
 $script:LoggedSensorMatchWarnings = @{}
+$script:LoggedImplausibleTemp     = @{}
+
+# Physical plausibility bounds for any temperature reading, used as a
+# defense-in-depth check independent of sensor-matching logic - see the
+# usage site in the main poll loop for the incident that motivated this.
+$TempSanityMinC = -20
+$TempSanityMaxC = 150
 
 if (-not (Test-Path $LogDir)) {
     New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
@@ -646,6 +653,24 @@ $script:DedicatedTempLabels = @(
     $Sensors | Where-Object { $_.Type -eq "temp" } | ForEach-Object { $_.SensorMatch }
 )
 
+# DIAGNOSTIC: dumps the exact type and content of each sensor's SensorMatch
+# right after construction. Added after a production incident where a GPU
+# sensor's SensorMatch was somehow reduced to a single character ('G') by
+# the time it reached the lookup code, causing a false-positive emergency
+# shutdown. This makes it possible to tell whether the corruption already
+# exists at config time (bug is in $GPUProfiles/$Sensors construction
+# above) or only appears later (bug is in Find-SensorValue/self-test).
+# Safe to remove once the root cause is confirmed and fixed.
+foreach ($diagSensor in $Sensors) {
+    $smType = if ($null -eq $diagSensor.SensorMatch) { "NULL" } else { $diagSensor.SensorMatch.GetType().Name }
+    $smDisplay = if ($diagSensor.SensorMatch -is [array]) {
+        "[" + ($diagSensor.SensorMatch -join ' | ') + "]"
+    } else {
+        "'$($diagSensor.SensorMatch)' (length $([string]$diagSensor.SensorMatch).Length)"
+    }
+    Write-Log "DIAG: Sensor '$($diagSensor.Name)' SensorMatch type=$smType value=$smDisplay"
+}
+
 # === SOFTWARE CHECK ===========================================================
 
 function Test-Requirements {
@@ -864,6 +889,11 @@ function Get-AllTempsInAlertState {
                 [System.Globalization.NumberStyles]::Float,
                 [System.Globalization.CultureInfo]::InvariantCulture,
                 [ref]$val)) { continue }
+        if ($val -lt $TempSanityMinC -or $val -gt $TempSanityMaxC) {
+            # Same defense-in-depth as the dedicated sensor loop: never
+            # treat an implausible number as a real temperature.
+            continue
+        }
 
         # Same dedup key as elsewhere: sensorIndex+readingId identifies one
         # physical reading, HWiNFO/RemoteHWInfo can list it twice.
@@ -1033,6 +1063,22 @@ $script:LoggedFallbackUsed = @{}
 function Find-SensorValueSingle {
     param($SensorData, [string]$Match, $PreferredSensorIndex = $null, [string]$PreferredUnit = $null)
 
+    # SAFETY GUARD: no real HWiNFO sensor label is 1-2 characters long. If
+    # $Match ever ends up that short (observed in production as a single
+    # stray 'G' - root cause not fully confirmed, suspected an array/string
+    # normalization edge case upstream), a "*G*" partial match would hit
+    # essentially any reading containing that letter, including completely
+    # unrelated RAM/memory readings, and hand back a value like 10019 that
+    # then gets compared against a Crit threshold as if it were a real
+    # temperature. Refuse outright rather than risk that.
+    if ($Match.Length -le 2) {
+        if (-not $script:LoggedSensorMatchWarnings["SHORT:$Match"]) {
+            Write-Log "REFUSED implausibly short SensorMatch candidate: '$Match' (length $($Match.Length)) - this would match almost anything" "ERROR"
+            $script:LoggedSensorMatchWarnings["SHORT:$Match"] = $true
+        }
+        return $null
+    }
+
     $exactMatches   = @()
     $partialMatches = @()
     foreach ($reading in $SensorData.readings) {
@@ -1102,11 +1148,16 @@ function Find-SensorValueSingle {
 function Find-SensorValue {
     param($SensorData, $Match, $PreferredSensorIndex = $null, [string]$PreferredUnit = $null, [string]$SensorDisplayName = $null)
 
-    # $Match can be a single label string, or an array of candidate labels
-    # tried in priority order (e.g. AMD's "CPU (Tctl/Tdie)" first, then
-    # generic Intel-style fallbacks). A plain string is just treated as a
-    # one-element list, so existing single-label sensors need no changes.
-    $candidates = if ($Match -is [array]) { $Match } else { @($Match) }
+    # Explicit type check (not an "is it NOT an array" inference): a genuine
+    # [string] goes straight to Find-SensorValueSingle with zero
+    # normalization in between. Only real arrays (currently just the CPU
+    # entry's fallback chain) go through the candidate loop below. See the
+    # self-test block above for why this was split out this way.
+    if ($Match -is [string]) {
+        return Find-SensorValueSingle -SensorData $SensorData -Match $Match -PreferredSensorIndex $PreferredSensorIndex -PreferredUnit $PreferredUnit
+    }
+
+    $candidates = $Match
 
     for ($i = 0; $i -lt $candidates.Count; $i++) {
         $value = Find-SensorValueSingle -SensorData $SensorData -Match $candidates[$i] -PreferredSensorIndex $PreferredSensorIndex -PreferredUnit $PreferredUnit
@@ -1395,7 +1446,41 @@ function Start-ThermalGuard {
                 if ($sensor.Group -eq "CPU" -and -not $EnableCPU) { continue }
                 if ($sensor.Group -eq "GPU" -and -not $EnableGPU) { continue }
 
-                $matchCandidates = if ($sensor.SensorMatch -is [array]) { $sensor.SensorMatch } else { @($sensor.SensorMatch) }
+                # Explicit type check, not an "is it NOT an array" inference:
+                # a genuine [string] always takes the exact single-candidate
+                # path that worked correctly pre-fallback-chains (v1.46).
+                # Only real arrays (currently just the CPU entry) go through
+                # the multi-candidate loop below. This was rewritten after a
+                # production incident where GPU sensors (plain strings) got
+                # corrupted into a single stray character ('G') somewhere in
+                # the array-normalization path - the exact mechanism was
+                # never fully confirmed even after extensive review, so
+                # rather than patch a suspect line, the string case now
+                # bypasses that code path entirely.
+                if ($sensor.SensorMatch -is [string]) {
+                    $singleMatch = $sensor.SensorMatch
+                    $candidates = $sensorData.readings | Where-Object {
+                        $_.labelOriginal -eq $singleMatch -or $_.labelUser -eq $singleMatch -or
+                        $_.labelOriginal -like "*$singleMatch*" -or $_.labelUser -like "*$singleMatch*"
+                    }
+                    if ($candidates.Count -gt 1 -and $sensor.PreferredSensorIndex) {
+                        $byIndex = $candidates | Where-Object { $_.sensorIndex -eq $sensor.PreferredSensorIndex }
+                        if ($byIndex) { $candidates = $byIndex }
+                    }
+                    if ($candidates.Count -gt 1 -and $sensor.Type -eq "fan") {
+                        $byUnit = $candidates | Where-Object { [string]$_.unit -eq "RPM" }
+                        if ($byUnit) { $candidates = $byUnit }
+                    }
+                    $reading = $candidates | Select-Object -First 1
+                    if ($reading) {
+                        Write-Log "  $($sensor.Name) -> labelOriginal='$($reading.labelOriginal)' sensorIndex=$($reading.sensorIndex) readingId=$($reading.readingId) unit=$($reading.unit) value=$($reading.value)"
+                    } else {
+                        Write-Log "  $($sensor.Name) -> NO MATCH for '$singleMatch'" "WARN"
+                    }
+                    continue
+                }
+
+                $matchCandidates = $sensor.SensorMatch
                 $reading = $null
                 $matchedCandidate = $null
                 foreach ($candidate in $matchCandidates) {
@@ -1462,6 +1547,23 @@ function Start-ThermalGuard {
             }
 
             $isCritical = $false
+
+            # SAFETY NET: refuse to treat an implausible value as a real
+            # temperature, regardless of how it got here. A correctly
+            # functioning sensor never reports below -20 C or above 150 C;
+            # if this ever fires, something upstream misidentified a reading
+            # (confirmed once in production: a RAM/memory value in MB got
+            # compared against a Crit threshold as if it were degrees C,
+            # triggering a false emergency shutdown at ~45 C real GPU temp).
+            if ($sensor.Type -eq "temp" -and ($value -lt $TempSanityMinC -or $value -gt $TempSanityMaxC)) {
+                if (-not $script:LoggedImplausibleTemp[$sName]) {
+                    Write-Log "${sName}: IMPLAUSIBLE value $value degrees (outside $TempSanityMinC..$TempSanityMaxC C) - treating as a bad reading, NOT evaluating Warn/Crit this poll" "ERROR"
+                    Send-Alert -Title "Sensor data implausible: $sName" -Body "Got $value degrees, which is outside any real range. Ignoring this reading rather than risk a false shutdown." -Priority "urgent"
+                    $script:LoggedImplausibleTemp[$sName] = $true
+                }
+                continue
+            }
+            $script:LoggedImplausibleTemp.Remove($sName)
 
             if ($sensor.Type -eq "temp") {
                 if ($value -ge $sensor.WarnThreshold -and -not $warnSent[$sName]) {
