@@ -1,0 +1,76 @@
+---
+name: Tag and Release
+
+# Second half of the release loop, chained after version-sync.yml:
+#   1. $ScriptVersion bumped in HWiNFO-ThermalGuard.ps1, pushed to main
+#   2. version-sync.yml opens a PR (branch "auto/version-sync") syncing the
+#      README heading - PSScriptAnalyzer (lint.yml) and markdownlint
+#      (markdown.yml) run on it automatically, since both already trigger on
+#      any pull_request.
+#   3. Human reviews and merges that PR -> THIS workflow fires, re-reads
+#      $ScriptVersion from main (source of truth), and pushes tag "vX.Y".
+#   4. That tag push triggers release.yml automatically, which builds and
+#      publishes the release ZIP.
+#
+# workflow_dispatch is a manual escape hatch: use it if a version bump ever
+# lands on main without going through the auto/version-sync PR (e.g. README
+# already matched, so no PR was opened) and the tag+release needs to be
+# created by hand.
+
+on:
+  pull_request:
+    types: [closed]
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    name: Tag main with $ScriptVersion and release
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true &&
+       github.event.pull_request.head.ref == 'auto/version-sync')
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Extract $ScriptVersion
+        id: script_version
+        run: |
+          VERSION=$(grep -oP '(?<=\$ScriptVersion = ")[^"]+' HWiNFO-ThermalGuard.ps1)
+          if [ -z "$VERSION" ]; then
+            echo "::error::Could not find \$ScriptVersion in HWiNFO-ThermalGuard.ps1"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Found script version: $VERSION"
+
+      - name: Check whether the tag already exists
+        id: tag_check
+        run: |
+          TAG="v${{ steps.script_version.outputs.version }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Tag $TAG already exists - nothing to do (probably re-run, or a no-op version-sync PR)."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create and push tag
+        if: steps.tag_check.outputs.exists == 'false'
+        env:
+          TAG: v${{ steps.script_version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+          echo "Pushed $TAG - release.yml will pick this up and build the release."
