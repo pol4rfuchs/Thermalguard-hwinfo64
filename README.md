@@ -9,7 +9,7 @@ Automatischer thermischer Schutz für Windows-Gaming-PCs.
 
 [![AMD CPU](https://img.shields.io/badge/AMD_CPU-volle_Unterst%C3%BCtzung-brightgreen?logo=amd&logoColor=white)](#gpu-profil)
 [![NVIDIA GPU](https://img.shields.io/badge/NVIDIA_GPU-volle_Unterst%C3%BCtzung-brightgreen?logo=nvidia&logoColor=white)](#gpu-profil)
-[![AMD GPU](https://img.shields.io/badge/AMD_GPU-Basis--Monitoring-orange?logo=amd&logoColor=white)](#gpu-profil)
+[![AMD GPU](https://img.shields.io/badge/AMD_GPU-volle_Unterst%C3%BCtzung-brightgreen?logo=amd&logoColor=white)](#gpu-profil)
 [![Intel CPU](https://img.shields.io/badge/Intel_CPU-nicht_unterst%C3%BCtzt-red?logo=intel&logoColor=white)](#sensordaten-beisteuern)
 [![Intel Arc GPU](https://img.shields.io/badge/Intel_Arc_GPU-nicht_unterst%C3%BCtzt-red?logo=intel&logoColor=white)](#sensordaten-beisteuern)
 
@@ -21,14 +21,15 @@ Automatischer thermischer Schutz für Windows-Gaming-PCs.
 | AMD CPU (AM5) | Ryzen 7000–9000 (Zen 4/5) | ⚠️ Gleiches Sensor-Label (`Tctl/Tdie`), sollte laufen, aber ungetestet |
 | NVIDIA GPU | RTX 50 (Blackwell) | ✅ Voll getestet (5070 Ti), inkl. Memory-Junction-Temp + Performance-Limit-Flags |
 | NVIDIA GPU | RTX 20/30/40 (Turing–Ada) | ⚠️ Basis-Temp sollte laufen, Memory-Junction-Temp wird von NVIDIA-Treibern auf älteren Karten teils gar nicht gemeldet |
-| AMD GPU | RX 9000 (RDNA4) | ✅ Basis-Monitoring getestet (9070 XT) |
-| AMD GPU | RX 6000/7000 (RDNA2/3) | ⚠️ Gleiche Sensor-Labels, sollte laufen, aber ungetestet |
+| AMD GPU | RX 9000 (RDNA4) | ✅ Basis-Monitoring getestet (9070 XT); Memory-Junction-Temp + Power laufen über dasselbe AMD-Profil, aber nicht separat auf RDNA4 bestätigt |
+| AMD GPU | RX 6000/7000 (RDNA2/3) | ✅ Voll getestet (6800 XT), inkl. Memory-Junction-Temp + Power (TGP) |
 | Intel CPU | alle | ❌ Nicht unterstützt (kein Tctl/Tdie-Äquivalent, andere Sensor-Namen) |
 | Intel Arc GPU | A-/B-Serie | ❌ Nicht unterstützt |
 
-> AMD GPU: Basis-Monitoring (Temp/Hotspot/Fan/Load) läuft. Erweiterte Sensoren
-> (Memory-Junction-Temp, Power-Draw), die NVIDIA seit kurzem hat, fehlen für
-> AMD noch mangels bestätigter Sensor-Labels auf echter Hardware.
+> AMD GPU: volle Sensor-Abdeckung (Temp/Hotspot/Fan/Load/Memory-Junction-Temp/
+> Power-Draw) bestätigt auf einer RX 6800 XT via Sensor-Dump. Einzige
+> verbleibende Lücke gegenüber NVIDIA: die Performance-Limit-Flags, die
+> HWiNFO nur für NVIDIA-GPUs als eigene Yes/No-Sensoren exponiert.
 
 <!-- -->
 
@@ -107,6 +108,8 @@ Die Profile setzen automatisch die richtigen Sensor-Labels:
 | GPU Hotspot | Nicht verfügbar | `GPU Hot Spot Temperature` |
 | GPU Fan | `GPU Fan1` | `GPU Fan` |
 | GPU Load | `GPU Core Load` | `GPU Utilization` |
+| GPU Memory Junction | `GPU Memory Junction Temperature` | `GPU Memory Junction Temperature` |
+| GPU Power | `GPU Power` | `Total Graphics Power (TGP)` |
 
 ### Toggles
 
@@ -143,6 +146,21 @@ $EnableNtfy = $false
 ```
 
 Windows Toast-Benachrichtigungen laufen immer, unabhängig von ntfy.
+
+### Update-Check (optional)
+
+Prüft periodisch das GitHub-Repo auf eine neuere Version und meldet sich per Toast + ntfy, wenn eine da ist. Standardmäßig **aus**.
+
+```powershell
+$EnableUpdateCheck        = $true
+$UpdateCheckRepo          = "pol4rfuchs/ThermalGuard-hwinfo64"   # "owner/repo"
+$UpdateCheckIntervalHours = 24
+```
+
+- Läuft einmal beim Start und danach alle `$UpdateCheckIntervalHours` Stunden weiter (geprüft aus dem Watchdog-Takt heraus, damit auch lange Sessions über den 12h-Reset hinweg mitbekommen, wenn zwischenzeitlich was released wurde).
+- Meldet eine neue Version **einmal**, nicht bei jedem Check erneut, solange nicht upgedatet wird.
+- Netzwerkfehler (z.B. offline) landen nur im Log, es gibt keinen Alert-Spam.
+- Nutzt für die Meldung dieselbe Toast+ntfy-Infrastruktur wie die Temperatur-Alerts — die ntfy-Einstellungen von oben gelten auch hier, der Toast kommt aber auch mit `$EnableNtfy = $false`.
 
 ### Schwellwerte
 
@@ -402,6 +420,8 @@ Alle 60 Sekunden (konfigurierbar) prüft der Watchdog:
 | HWiNFO Laufzeit > 11.5h | Beide Prozesse stoppen → HWiNFO neu → RemoteHWInfo neu |
 | Endpoint offline | Sofortiger Watchdog-Check (normales Intervall überspringen) |
 
+Derselbe 60s-Takt stößt (intern selbst auf `$UpdateCheckIntervalHours` gedrosselt) auch den Update-Check an, siehe oben.
+
 ### 12h-Reset Ablauf
 
 ```text
@@ -528,7 +548,8 @@ Start-HWiNFO-Remote.vbs (shell:startup)
                     ├── Watchdog alle 60s
                     │       ├── HWiNFO64 alive? → Neustart wenn down
                     │       ├── RemoteHWInfo alive? → Neustart wenn down
-                    │       └── HWiNFO > 11.5h? → 12h-Reset
+                    │       ├── HWiNFO > 11.5h? → 12h-Reset
+                    │       └── Update-Check (gedrosselt auf Intervall)
                     ├── Polling-Loop alle 5s
                     │       ├── Stufe 1: Toast + ntfy
                     │       ├── Stufe 2: taskkill
@@ -551,12 +572,16 @@ Start-HWiNFO-Remote.vbs (shell:startup)
 
 ## Sensordaten beisteuern
 
-Intel CPUs, AMD GPUs (erweitertes Monitoring) und Intel Arc GPUs fehlen aktuell,
-weil die genauen HWiNFO-Sensor-Labels auf echter Hardware bestätigt werden
-müssen, statt geraten zu werden. Wer eins davon hat, kann in 2-3 Minuten
-helfen: [Issue-Formular öffnen](../../issues/new?template=report.yml),
+Intel CPUs und Intel Arc GPUs fehlen aktuell, weil die genauen HWiNFO-Sensor-Labels
+auf echter Hardware bestätigt werden müssen, statt geraten zu werden. Wer eins
+davon hat, kann in 2-3 Minuten helfen: [Issue-Formular öffnen](../../issues/new?template=report.yml),
 `Get-SensorDump.ps1` laufen lassen (sampled 120s, idealerweise mit
 Last/Spiel dazwischen) und die Ausgabe reinpasten.
+
+`Get-SensorDump.ps1` setzt voraus, dass HWiNFO64 + RemoteHWInfo bereits laufen
+(also `HWiNFO-ThermalGuard.ps1` bzw. den `.bat`-Launcher vorher starten und
+laufen lassen) — läuft RemoteHWInfo nicht, bricht das Script sofort mit einer
+klaren Fehlermeldung ab, statt 120 Sekunden lang stumm zu retryen.
 
 ---
 
