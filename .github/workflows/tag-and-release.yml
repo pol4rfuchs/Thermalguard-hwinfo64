@@ -9,8 +9,11 @@ name: Tag and Release
 #      any pull_request.
 #   3. Human reviews and merges that PR -> THIS workflow fires, re-reads
 #      $ScriptVersion from main (source of truth), and pushes tag "vX.Y".
-#   4. That tag push triggers release.yml automatically, which builds and
-#      publishes the release ZIP.
+#   4. GITHUB_TOKEN-authored pushes don't trigger other workflows (GitHub's
+#      own loop-prevention), so release.yml's "on: push: tags: v*" would
+#      never actually fire from that push. This workflow therefore
+#      dispatches release.yml directly afterwards via "gh workflow run",
+#      which builds and publishes the release ZIP.
 #
 # workflow_dispatch is a manual escape hatch: use it if a version bump ever
 # lands on main without going through the auto/version-sync PR (e.g. README
@@ -25,6 +28,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   tag:
@@ -73,4 +77,18 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag -a "$TAG" -m "Release $TAG"
           git push origin "$TAG"
-          echo "Pushed $TAG - release.yml will pick this up and build the release."
+          echo "Pushed $TAG"
+
+      - name: Trigger release.yml
+        # A tag push made with the default GITHUB_TOKEN does NOT trigger
+        # other workflows (GitHub's loop-prevention for GITHUB_TOKEN-authored
+        # events) - so release.yml's "on: push: tags: v*" never actually
+        # fired from the step above. Dispatch it explicitly instead, using
+        # the same workflow_dispatch "tag" input release.yml already accepts.
+        if: steps.tag_check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: v${{ steps.script_version.outputs.version }}
+        run: |
+          gh workflow run release.yml --ref main -f tag="$TAG" -f prerelease=false
+          echo "Dispatched release.yml for $TAG (prerelease=false)"

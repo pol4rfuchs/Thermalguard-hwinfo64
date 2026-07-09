@@ -11,6 +11,10 @@ on:
         description: "Tag name for test release, e.g. v1.5-test (no spaces)"
         required: true
         default: "v0.0-test"
+      prerelease:
+        description: "Mark as prerelease? Leave 'true' for manual test releases; tag-and-release.yml passes 'false' for real version releases."
+        required: false
+        default: "true"
 
 permissions:
   contents: write
@@ -83,4 +87,8 @@ jobs:
           files: ThermalGuard-*.zip
           generate_release_notes: true
           fail_on_unmatched_files: true
-          prerelease: ${{ github.event_name == 'workflow_dispatch' }}
+          # Tag pushes (real releases pushed directly) are never a
+          # prerelease. workflow_dispatch runs use the "prerelease" input -
+          # true by default for manual test releases, but tag-and-release.yml
+          # passes "false" explicitly for real version-bump releases.
+          prerelease: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.prerelease == 'true' }}
