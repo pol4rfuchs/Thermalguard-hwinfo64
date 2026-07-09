@@ -19,7 +19,7 @@
 # line below. There was a stale "v2.0" hardcoded in two separate places
 # after an abandoned v2.0 attempt was reverted - this variable exists so
 # that never happens silently again. Bump this and nowhere else.
-$ScriptVersion = "1.47"
+$ScriptVersion = "1.48"
 
 # --- TLS (GLOBAL, EARLY) -----------------------------------------------------
 # PowerShell 5.1 / .NET Framework does not always default to TLS 1.2, which
