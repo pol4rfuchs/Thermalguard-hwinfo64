@@ -1,4 +1,4 @@
-# HWiNFO Thermal Guard v1.47
+# HWiNFO Thermal Guard v1.48
 
 [Deutsch](README.md) | **[English](README.en.md)**
 
