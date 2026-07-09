@@ -71,6 +71,11 @@ jobs:
             illustrative example log lines elsewhere in the README are left
             alone, since those document historical output, not the current
             version.
+
+            **Merging this PR tags and releases `v${{ steps.script_version.outputs.version }}`
+            automatically** (see `tag-and-release.yml`), which in turn
+            triggers `release.yml` to build and publish the ZIP. Review the
+            lint/markdown checks above before merging.
           branch: "auto/version-sync"
           labels: |
             documentation
