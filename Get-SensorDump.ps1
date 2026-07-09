@@ -53,6 +53,17 @@ $OutFile      = Join-Path $env:USERPROFILE "Desktop\ThermalGuard-SensorDump.txt"
 # way.
 $blockPattern = '(?i)serial|mac address|uuid|volume'
 
+# Fail fast instead of silently retrying for the full window: if RemoteHWInfo
+# isn't even running yet, every poll below is guaranteed to fail anyway.
+# ThermalGuard.ps1 (or the .bat launcher) needs to be started FIRST and left
+# running - this script only reads the endpoint, it doesn't start anything.
+if (-not (Get-Process RemoteHWInfo -ErrorAction SilentlyContinue)) {
+    Write-Host "ERROR: RemoteHWInfo is not running." -ForegroundColor Red
+    Write-Host "Start HWiNFO-ThermalGuard.ps1 (or Start-HWiNFO-Remote.bat) first and leave it running," -ForegroundColor Yellow
+    Write-Host "then run this script in a second console." -ForegroundColor Yellow
+    exit 1
+}
+
 # Keyed by "sensorIndex|readingId" -> object tracking the peak value seen.
 $peakValues = @{}
 
