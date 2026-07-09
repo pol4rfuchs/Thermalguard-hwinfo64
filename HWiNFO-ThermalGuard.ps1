@@ -565,13 +565,15 @@ $GPUProfiles = @{
         FanWarn          = $GPU_FanWarnRPM
         FanCrit          = $GPU_FanCritRPM
         LoadMatch        = "GPU Utilization"
-        # Not confirmed on real AMD hardware yet (labels above were, on this
-        # system's NVIDIA card) - leave off until verified via the same
-        # json.json dump on an AMD GPU, rather than guessing a label.
-        MemJunctionMatch = $null
+        # Confirmed live on AMD RX 6800 XT (sensorIndex 11, unit degree-C) via
+        # a 120s ThermalGuard-SensorDump.txt sample - same label as on NVIDIA.
+        MemJunctionMatch = "GPU Memory Junction Temperature"
         MemJunctionWarn  = $GPU_MemJunctionWarn
         MemJunctionCrit  = $GPU_MemJunctionCrit
-        PowerMatch       = $null
+        # Confirmed live on AMD RX 6800 XT (sensorIndex 11, unit W) via the
+        # same sample. RDNA2 exposes this as "Total Graphics Power (TGP)"
+        # rather than NVIDIA's "GPU Power" label.
+        PowerMatch       = "Total Graphics Power (TGP)"
     }
 }
 
@@ -732,16 +734,22 @@ function Test-Requirements {
 
     try {
         $r = Invoke-RestMethod -Uri $HWiNFO_URL -TimeoutSec 5
-        if ($r.hwinfo -and $r.hwinfo.readings) {
+        if ($r.hwinfo -and $r.hwinfo.readings -and $r.hwinfo.readings.Count -gt 0) {
             Write-Log "HTTP Endpoint   [OK] $HWiNFO_URL ($($r.hwinfo.readingCount) readings)"
         } else {
-            Write-Log "HTTP Endpoint   [ERROR] Invalid JSON structure" "ERROR"
-            Write-Log "  Hint: HWiNFO may not be in Sensors-only mode yet (report finding #17)." "WARN"
+            # Reachable, but no HWiNFO readings. RemoteHWInfo runs with
+            # -gpuz=0 -afterburner=0, so its GPUZShMem/MAHMSharedMemory
+            # mappings are ALWAYS null by design and irrelevant here - an
+            # empty/near-empty response means HWiNFO's own Shared Memory
+            # Support is off, not a "Sensors-only mode" issue.
+            Write-Log "HTTP Endpoint   [ERROR] Reachable but no HWiNFO readings" "ERROR"
+            Write-Log "  Hint: HWiNFO64 -> Settings -> enable 'Shared Memory Support', then restart HWiNFO64." "WARN"
+            Write-Log "  (GPU-Z/Afterburner shared memory is intentionally off via -gpuz=0 -afterburner=0, that is not the cause.)" "WARN"
             $ok = $false
         }
     } catch {
         Write-Log "HTTP Endpoint   [ERROR] Not reachable: $HWiNFO_URL" "ERROR"
-        Write-Log "  Hint: confirm HWiNFO Sensors-only mode and Shared Memory Support are both enabled." "WARN"
+        Write-Log "  Hint: RemoteHWInfo may still be starting, or Sensors-only mode isn't active yet." "WARN"
         $ok = $false
     }
 
@@ -1208,11 +1216,35 @@ function Invoke-Shutdown {
 # Shared Memory disabled, while still showing up in Get-Process.
 
 function Test-EndpointHealthy {
+    # Report finding #23: distinguish WHY the endpoint is unhealthy instead of
+    # collapsing every failure into one generic bool. RemoteHWInfo is started
+    # with "-hwinfo=1 -gpuz=0 -afterburner=0", so its own log always shows
+    # OpenFileMappingA("GPUZShMem") and OpenFileMappingA("MAHMSharedMemory")
+    # returning a NULL handle -- that is expected and NOT a problem, since
+    # those two sources are intentionally disabled. Only a NULL handle for
+    # "Global\HWiNFO_SENS_SM2" (i.e. $r.hwinfo has no readings even though the
+    # HTTP endpoint answered) means HWiNFO's own Shared Memory Support is off.
+    # That distinction previously only existed in a human's head after reading
+    # RemoteHWInfo's raw log; now the watchdog says it directly.
     try {
         $r = Invoke-RestMethod -Uri $HWiNFO_URL -TimeoutSec 5 -ErrorAction Stop
-        return ($null -ne $r.hwinfo -and $null -ne $r.hwinfo.readings -and $r.hwinfo.readings.Count -gt 0)
     } catch {
-        return $false
+        return [PSCustomObject]@{
+            Healthy = $false
+            Reason  = "Endpoint not reachable ($HWiNFO_URL) - RemoteHWInfo may still be starting or has crashed."
+        }
+    }
+
+    if ($null -ne $r.hwinfo -and $null -ne $r.hwinfo.readings -and $r.hwinfo.readings.Count -gt 0) {
+        return [PSCustomObject]@{
+            Healthy = $true
+            Reason  = "$($r.hwinfo.readings.Count) readings"
+        }
+    }
+
+    return [PSCustomObject]@{
+        Healthy = $false
+        Reason  = "Endpoint reachable but no HWiNFO readings (empty/near-empty JSON). This points to HWiNFO's own 'Shared Memory Support' setting being disabled, NOT to GPU-Z/Afterburner (those are intentionally off via -gpuz=0 -afterburner=0). Fix: HWiNFO64 -> Settings -> enable 'Shared Memory Support', then restart HWiNFO64."
     }
 }
 
@@ -1230,7 +1262,8 @@ function Invoke-Watchdog {
 
     $hwProc = Get-Process HWiNFO64 -ErrorAction SilentlyContinue
     $rhProc = Get-Process RemoteHWInfo -ErrorAction SilentlyContinue
-    $endpointOk = Test-EndpointHealthy
+    $endpointDiag = Test-EndpointHealthy
+    $endpointOk = $endpointDiag.Healthy
 
     if (-not $hwProc) {
         Write-Log "WATCHDOG: HWiNFO64 process gone, restarting..." "WARN"
@@ -1308,6 +1341,7 @@ function Invoke-Watchdog {
     if (-not $endpointOk) {
         $UnhealthyCycleCount.Value = $UnhealthyCycleCount.Value + 1
         Write-Log "WATCHDOG: processes alive but endpoint unhealthy (cycle $($UnhealthyCycleCount.Value)/$EndpointUnhealthyCyclesBeforeRestart)" "WARN"
+        Write-Log "  Reason: $($endpointDiag.Reason)" "WARN"
         if ($UnhealthyCycleCount.Value -ge $EndpointUnhealthyCyclesBeforeRestart) {
             Write-Log "WATCHDOG: forcing restart of HWiNFO64 + RemoteHWInfo (data not flowing despite live processes)" "WARN"
             Send-Alert -Title "Watchdog: data stalled" -Body "Forcing HWiNFO + RemoteHWInfo restart" -Priority "urgent"
