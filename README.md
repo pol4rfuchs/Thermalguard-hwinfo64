@@ -164,38 +164,55 @@ $UpdateCheckIntervalHours = 24
 
 ### Schwellwerte
 
+Zwei Wege, CPU/GPU Warn+Crit zu setzen:
+
+**A) Empfohlen — den einen Datenblatt-Wert eintragen, Rest automatisch:**
+
 ```powershell
-$CPU_WarnTemp    = 85     # CPU Vorwarnung ab hier
-$CPU_CritTemp    = 91     # CPU Hard-Stop ab hier
-$GPU_WarnTemp    = 83     # GPU Vorwarnung
-$GPU_CritTemp    = 90     # GPU Hard-Stop
+$CPU_Tjmax       = 90     # z.B. 90 für einen Ryzen 7 5800X3D - Datenblatt der CPU
+$GPU_MaxTempSpec = 88     # offizielle Max-GPU-Temp lt. Hersteller-Spec-Seite
+```
+
+Daraus errechnet sich automatisch:
+
+```powershell
+$CPU_WarnMarginC = 10   # Warn = Tjmax - 10
+$CPU_CritMarginC = 3    # Crit = Tjmax - 3
+$GPU_WarnMarginC = 8    # Warn = MaxTempSpec - 8
+$GPU_CritMarginC = 2    # Crit = MaxTempSpec - 2
+```
+
+Kein Raten mehr nötig, welche Warn/Crit-Zahl aus einer generischen Tabelle "passt" — nur der eine offizielle Rohwert wird gebraucht, den Marge übernimmt das Script.
+
+**B) Manuell, volle Kontrolle:**
+
+`$CPU_Tjmax` und `$GPU_MaxTempSpec` auf `$null` lassen (Standard) und stattdessen direkt setzen:
+
+```powershell
+$CPU_WarnTemp    = 80     # CPU Vorwarnung ab hier
+$CPU_CritTemp    = 87     # CPU Hard-Stop ab hier
+$GPU_WarnTemp    = 80     # GPU Vorwarnung
+$GPU_CritTemp    = 86     # GPU Hard-Stop
+```
+
+Das sind auch genau die Fallback-Werte, die gelten, solange `$CPU_Tjmax`/`$GPU_MaxTempSpec` `$null` sind — bestehende Configs von vor diesem Feature ändern sich also nicht.
+
+Unverändert, unabhängig von A/B:
+
+```powershell
 $GPU_HotspotWarn = 95     # GPU Hotspot Vorwarnung (nur AMD)
 $GPU_HotspotCrit = 100    # GPU Hotspot Hard-Stop (nur AMD)
 $GPU_FanWarnRPM  = 300    # Fan-Warnung unter diesem Wert bei Last
 $GPU_FanCritRPM  = 0      # Fan Hard-Stop: 0 RPM bei Last
 ```
 
-**Richtwerte:**
-
-| Komponente | Konservativ | Standard | Aggressiv |
-| --- | --- | --- | --- |
-| CPU Warn | 80°C | 85°C | 88°C |
-| CPU Crit | 88°C | 91°C | 95°C |
-| GPU Warn | 78°C | 83°C | 85°C |
-| GPU Crit | 85°C | 90°C | 92°C |
-| GPU Hotspot Warn | 90°C | 95°C | 97°C |
-| GPU Hotspot Crit | 95°C | 100°C | 105°C |
-
-> **Wichtig:** Das sind grobe Orientierungswerte, keine fertige Konfiguration
-> zum Copy-Pasten. Die tatsächlich sinnvollen Werte hängen von **deiner**
-> exakten CPU/GPU ab (Tjmax laut Hersteller-Datenblatt bei der CPU, offizielle
-> maximale GPU-Temperatur laut Hersteller bei der Grafikkarte) und sollten
-> mit Marge darunter gesetzt werden - nicht einfach eine Spalte übernehmen.
-> Zum Vergleich: die tatsächliche Konfiguration in diesem Repo ist auf einen
-> Ryzen 7 5800X3D (Tjmax 90°C) und eine RTX 5070 Ti (offizielles Maximum
-> 88°C) abgestimmt und liegt deshalb quer über alle drei Spalten verteilt,
-> nicht in einer einzigen. Miss/prüfe deine eigenen Werte, statt diese
-> Tabelle oder das Repo-Beispiel 1:1 zu übernehmen.
+> **Wichtig:** Auch mit Weg A ersetzt das Script keine eigene Recherche —
+> `$CPU_Tjmax` (Datenblatt der CPU) und `$GPU_MaxTempSpec` (Hersteller-Spec-
+> Seite der Grafikkarte) musst du selbst nachschlagen, die kennt HWiNFO
+> nicht zuverlässig als Sensorwert. Zum Vergleich: die tatsächliche
+> Konfiguration in diesem Repo ist auf einen Ryzen 7 5800X3D (Tjmax 90°C)
+> und eine RTX 5070 Ti (offizielles Maximum 88°C) abgestimmt — genau die
+> Zahlen, die oben als Beispiel für `$CPU_Tjmax`/`$GPU_MaxTempSpec` stehen.
 
 ### Timing
 
