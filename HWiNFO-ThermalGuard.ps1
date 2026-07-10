@@ -19,7 +19,7 @@
 # line below. There was a stale "v2.0" hardcoded in two separate places
 # after an abandoned v2.0 attempt was reverted - this variable exists so
 # that never happens silently again. Bump this and nowhere else.
-$ScriptVersion = "1.48"
+$ScriptVersion = "1.49"
 
 # --- TLS (GLOBAL, EARLY) -----------------------------------------------------
 # PowerShell 5.1 / .NET Framework does not always default to TLS 1.2, which
@@ -63,6 +63,16 @@ $EnableFipha = $true
 # --- ntfy ----------------------------------------------------------------------
 $NTFY_URL   = "https://ntfy.sh"
 $NTFY_TOPIC = "ha-thermalguard-yourname"
+
+# --- UPDATE CHECK ----------------------------------------------------------------
+# Checks GitHub's "latest release" API against $ScriptVersion and sends one
+# toast + ntfy alert ("update available") when a newer tagged version exists.
+# Off by default - set $UpdateCheckRepo to your fork/repo and flip this on.
+# Uses the ntfy settings above for the alert; independent of $EnableNtfy so
+# the toast still fires even with ntfy off (Send-Alert always tries both).
+$EnableUpdateCheck        = $false
+$UpdateCheckRepo          = "pol4rfuchs/ThermalGuard-hwinfo64"   # "owner/repo"
+$UpdateCheckIntervalHours = 24
 
 # --- ALL-TEMPS OVERVIEW REPORT ---------------------------------------------------
 # Independent of the 4 monitored sensors above (CPU/GPU/Hotspot/Fan): this scans
@@ -121,16 +131,39 @@ $script:DegreeSign   = [char]0x00B0
 $TempUnitPattern     = "(?i)^\s*($($script:DegreeSign)c|deg\s*c|c)\s*`$"
 
 # --- THRESHOLDS ------------------------------------------------------------
-# Hardware basis: AMD Ryzen 7 5800X3D has a Tjmax (hardware throttle point)
-# of 90 C. The previous default Crit value of 91 C was ABOVE that point,
+# Two ways to set CPU/GPU Warn+Crit, pick one:
+#
+#   A) RECOMMENDED - fill in $CPU_Tjmax / $GPU_MaxTempSpec below with the ONE
+#      number from your own chip's official datasheet (CPU Tjmax) / GPU
+#      manufacturer spec page (max GPU temp). Warn/Crit get computed
+#      automatically using the margins right below - no need to guess two
+#      derived numbers from a generic reference table.
+#   B) Leave both $null (default) and set $CPU_WarnTemp/$CPU_CritTemp/
+#      $GPU_WarnTemp/$GPU_CritTemp yourself, further down - full manual
+#      control, e.g. if you don't have/trust an exact spec number. This is
+#      also what keeps existing configs from before this feature unchanged.
+$CPU_Tjmax       = $null   # e.g. 90 for a Ryzen 7 5800X3D - see your CPU's datasheet
+$GPU_MaxTempSpec = $null   # official max GPU temp from the manufacturer's spec page
+
+$CPU_WarnMarginC = 10   # Warn = Tjmax - this
+$CPU_CritMarginC = 3    # Crit = Tjmax - this
+$GPU_WarnMarginC = 8    # Warn = MaxTempSpec - this
+$GPU_CritMarginC = 2    # Crit = MaxTempSpec - this
+
+# Hardware basis for the manual fallback values below: AMD Ryzen 7 5800X3D
+# has a Tjmax (hardware throttle point) of 90 C, and this repo's RTX 5070 Ti
+# has an official max GPU temp of 88 C - same numbers $CPU_Tjmax /
+# $GPU_MaxTempSpec above would produce if you filled them in instead. A
+# previous default Crit value of 91 C was ABOVE the 5800X3D's 90 C Tjmax,
 # meaning the hardware would already be throttling itself before this
 # script's own "critical" stage ever triggered (report finding, hardware
-# limits section). Values below leave a safety margin under each chip's
-# real throttle point instead of guessing a round number.
-$CPU_WarnTemp    = 80    # AMD 5800X3D Tjmax is 90 C; this leaves 10 C margin
-$CPU_CritTemp    = 87    # 3 C margin under Tjmax
-$GPU_WarnTemp    = 80    # NVIDIA official Maximum GPU Temperature for RTX 5070 Ti = 88 C
-$GPU_CritTemp    = 86    # 2 C margin under NVIDIA's published 88 C spec (verified, not assumed)
+# limits section) - these fallbacks leave a safety margin under the real
+# throttle point instead of guessing a round number.
+$CPU_WarnTemp = if ($CPU_Tjmax) { $CPU_Tjmax - $CPU_WarnMarginC } else { 80 }
+$CPU_CritTemp = if ($CPU_Tjmax) { $CPU_Tjmax - $CPU_CritMarginC } else { 87 }
+$GPU_WarnTemp = if ($GPU_MaxTempSpec) { $GPU_MaxTempSpec - $GPU_WarnMarginC } else { 80 }
+$GPU_CritTemp = if ($GPU_MaxTempSpec) { $GPU_MaxTempSpec - $GPU_CritMarginC } else { 86 }
+
 $GPU_HotspotWarn = 95    # AMD hotspot only, typical AMD GPU Tjmax ~110 C
 $GPU_HotspotCrit = 105
 $GPU_FanWarnRPM  = 300
@@ -140,6 +173,7 @@ $GPULoadThreshold = 50
 # this leaves margin under that similar to the CPU/GPU die margins above.
 $GPU_MemJunctionWarn = 90
 $GPU_MemJunctionCrit = 100
+
 
 # --- PERFORMANCE LIMIT FLAGS (NVIDIA) -------------------------------------------
 # HWiNFO exposes these as separate Yes/No readings per GPU. Alerted on
@@ -1054,6 +1088,66 @@ function Send-Alert {
     Send-Ntfy  -Title $Title -Body $Body -Priority $Priority
 }
 
+# === UPDATE CHECK ==============================================================
+# Report finding: users had no way to know a newer ThermalGuard version was
+# out short of manually checking GitHub. This queries the "latest release"
+# API (drafts/prereleases excluded by GitHub itself), compares the tag
+# against $ScriptVersion, and alerts once per new version - not once per
+# check interval, so it doesn't re-nag every 24h while the user is on the
+# same outdated version.
+
+$script:LastUpdateCheck          = $null
+$script:LastAlertedUpdateVersion = $null
+
+function Invoke-UpdateCheck {
+    if (-not $EnableUpdateCheck) { return }
+
+    $now = Get-Date
+    if ($script:LastUpdateCheck -and (($now - $script:LastUpdateCheck).TotalHours -lt $UpdateCheckIntervalHours)) {
+        return
+    }
+    $script:LastUpdateCheck = $now
+
+    try {
+        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$UpdateCheckRepo/releases/latest" `
+            -Headers @{ "User-Agent" = "HWiNFO-ThermalGuard" } -TimeoutSec 10 -ErrorAction Stop
+    } catch {
+        Write-Log "Update check    [WARN] Could not reach GitHub: $_" "WARN"
+        return
+    }
+
+    # Strip a leading "v" and any "-suffix" (e.g. "-test" prereleases, which
+    # /releases/latest shouldn't return anyway, but be defensive) before
+    # parsing as a [version] so "v1.48" and "1.48" both work.
+    $remoteTag        = [string]$release.tag_name
+    $remoteVersionStr = ($remoteTag -replace '^v', '') -replace '-.*$', ''
+
+    try {
+        $remoteVersion = [version]$remoteVersionStr
+        $localVersion  = [version]$ScriptVersion
+    } catch {
+        Write-Log "Update check    [WARN] Could not parse version (local='$ScriptVersion', remote tag='$remoteTag')" "WARN"
+        return
+    }
+
+    if ($remoteVersion -le $localVersion) {
+        Write-Log "Update check    [OK] Running latest ($ScriptVersion), GitHub latest is $remoteTag"
+        return
+    }
+
+    if ($script:LastAlertedUpdateVersion -eq $remoteTag) {
+        # Already alerted this exact version this run - don't re-alert every
+        # interval while the user just hasn't updated yet.
+        return
+    }
+    $script:LastAlertedUpdateVersion = $remoteTag
+
+    Write-Log "Update check    [INFO] New version available: $remoteTag (running $ScriptVersion)" "WARN"
+    Send-Alert -Title "ThermalGuard update available" `
+        -Body "$remoteTag is out, you're on $ScriptVersion. https://github.com/$UpdateCheckRepo/releases/latest" `
+        -Priority "default"
+}
+
 
 # === SENSOR READING ===========================================================
 
@@ -1260,6 +1354,8 @@ function Invoke-Watchdog {
     }
     $LastWatchdogRun.Value = $now
 
+    Invoke-UpdateCheck
+
     $hwProc = Get-Process HWiNFO64 -ErrorAction SilentlyContinue
     $rhProc = Get-Process RemoteHWInfo -ErrorAction SilentlyContinue
     $endpointDiag = Test-EndpointHealthy
@@ -1427,6 +1523,8 @@ function Start-ThermalGuard {
         $hwProc = Get-Process HWiNFO64 -ErrorAction SilentlyContinue
         $script:HWiNFOStartTime = if ($hwProc) { $hwProc.StartTime } else { Get-Date }
     }
+
+    Invoke-UpdateCheck
 
     $triggerTimestamps      = @{}
     $stage2Executed         = @{}
