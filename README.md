@@ -125,7 +125,7 @@ $EnableNtfy = $true     # Push-Benachrichtigungen via ntfy
 
 ```powershell
 $EnableNtfy = $true
-$NTFY_URL   = "https://ntfy.your-domain.example"
+$NTFY_URL   = "https://ntfy.deine-domain.example"
 $NTFY_TOPIC = "ha-system"
 ```
 
@@ -391,7 +391,7 @@ PowerShell-Einzeiler (Status aller Dienste):
 ```powershell
 $GPUProfile = "AUTO"      # erkennt NVIDIA automatisch
 $EnableNtfy = $true
-$NTFY_URL   = "https://ntfy.your-domain.example"
+$NTFY_URL   = "https://ntfy.deine-domain.example"
 $NTFY_TOPIC = "ha-system"
 $EnableHWiNFO12hReset = $false   # HWiNFO Pro
 ```
