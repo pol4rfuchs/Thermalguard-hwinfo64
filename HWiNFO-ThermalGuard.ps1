@@ -14,12 +14,27 @@
 # independent safeguard against the same class of bug.
 # ============================================================================
 
+param(
+    # Runs ONLY the staged-update installer (stop -> swap -> restart -> health
+    # check -> rollback-if-unhealthy), then exits. Used by
+    # Approve-ThermalGuardUpdate.ps1 for manual approval, and internally by
+    # this same script when $EnableAutoInstall = $true. Never runs the
+    # thermal monitoring loop itself when this switch is present.
+    [switch]$InstallPendingUpdate
+)
+
 # --- VERSION ---------------------------------------------------------------
 # Single source of truth for the version number, used in the startup log
 # line below. There was a stale "v2.0" hardcoded in two separate places
 # after an abandoned v2.0 attempt was reverted - this variable exists so
 # that never happens silently again. Bump this and nowhere else.
-$ScriptVersion = "1.49"
+#
+# v1.50: added actual update installation (download, syntax-validate,
+# backup, stage, optional auto-swap with health-check rollback) on top of
+# the existing v1.49 detect-only update check. See $EnableAutoDownload /
+# $EnableAutoInstall in the config block below, and
+# Approve-ThermalGuardUpdate.ps1 for the manual-approval path.
+$ScriptVersion = "1.50"
 
 # --- TLS (GLOBAL, EARLY) -----------------------------------------------------
 # PowerShell 5.1 / .NET Framework does not always default to TLS 1.2, which
@@ -73,6 +88,47 @@ $NTFY_TOPIC = "ha-thermalguard-yourname"
 $EnableUpdateCheck        = $false
 $UpdateCheckRepo          = "pol4rfuchs/ThermalGuard-hwinfo64"   # "owner/repo"
 $UpdateCheckIntervalHours = 24
+
+# --- UPDATE INSTALL (download, stage, and swap the running script) ----------------
+# Requires $EnableUpdateCheck = $true above; this only controls what happens
+# once a newer version has already been detected.
+#
+# $EnableAutoDownload:
+#   $false (default) - detection only, as before. No files are touched.
+#   $true  - the new version is downloaded and syntax-validated automatically,
+#            then staged as "<script>.pending-vX.Y.ps1" next to the running
+#            script and a backup of the CURRENT file is made as
+#            "<script>.backup-vX.Y.ps1". Nothing is put live yet.
+#
+# $EnableAutoInstall:
+#   $false (default) - a staged update sits there until you approve it, either
+#            by running Approve-ThermalGuardUpdate.ps1 (recommended - see
+#            that file's own header) or by manually renaming the .pending
+#            file over the live one yourself.
+#   $true  - the staged update is swapped in and the process restarts itself
+#            automatically, no human step in between. Only meaningful
+#            combined with $EnableAutoDownload = $true. NOT recommended for
+#            a script whose job is to shut your PC down on overheat - see
+#            the README section on update safety before enabling this.
+#
+# Regardless of these two flags, an update is never staged or installed
+# while any sensor is currently in an active Stage 2/3 critical state (see
+# $script:AnyStageCriticalActive further down) - overheat handling always
+# takes priority over updating itself.
+$EnableAutoDownload = $false
+$EnableAutoInstall  = $false
+
+# How many backup generations to keep as "<script>.backup-vX.Y.ps1" files
+# next to the live script. Oldest beyond this count are deleted automatically
+# after a new backup is made. Set to 0 to keep only the single most recent
+# backup no history beyond "last known good".
+$UpdateBackupsToKeep = 3
+
+# After an auto-install swap, the new process must reach its first
+# successful sensor poll within this many seconds, or the watchdog
+# considers the update a failure and rolls back to the pre-update backup
+# automatically (see Invoke-Watchdog's rollback check).
+$UpdateHealthCheckTimeoutSec = 90
 
 # --- ALL-TEMPS OVERVIEW REPORT ---------------------------------------------------
 # Independent of the 4 monitored sensors above (CPU/GPU/Hotspot/Fan): this scans
@@ -225,6 +281,14 @@ $HWiNFO_URL = "http://localhost:60000/json.json"
 
 # --- INSTALL TARGET FOLDER (allowlist root for auto-download) -------------------
 $ToolsDir = "C:\Tools"
+
+# --- SCHEDULED TASK NAME -----------------------------------------------------
+# Must match the -TaskName used in Install-ScheduledTask.ps1 exactly - the
+# update installer (Install-ThermalGuardUpdate) stops and restarts this task
+# by name during a swap/rollback. Two separate files, so there is no single
+# source of truth to enforce this automatically; if you rename the task in
+# one place, rename it here too.
+$ThermalGuardTaskName = "HWiNFO Thermal Guard"
 
 # --- WATCHDOG --------------------------------------------------------------------
 $EnableWatchdog        = $true
@@ -1098,9 +1162,33 @@ function Send-Alert {
 
 $script:LastUpdateCheck          = $null
 $script:LastAlertedUpdateVersion = $null
+$script:LastStagedUpdateVersion  = $null
+$script:AnyStageCriticalActive   = $false
+
+function ConvertTo-SafeAlertText {
+    # Toast/ntfy bodies are single-line-ish and length-limited in practice;
+    # a raw multi-paragraph GitHub release body would either get truncated
+    # ungracefully by the notification system or blow past ntfy's server
+    # limits. This collapses it to something readable in a notification and
+    # points at the full release page for the rest.
+    param([string]$Text, [int]$MaxLength = 300)
+    if (-not $Text) { return "" }
+    $oneLine = ($Text -replace '\r?\n', ' ' -replace '\s+', ' ').Trim()
+    if ($oneLine.Length -gt $MaxLength) {
+        $oneLine = $oneLine.Substring(0, $MaxLength) + "..."
+    }
+    return $oneLine
+}
 
 function Invoke-UpdateCheck {
     if (-not $EnableUpdateCheck) { return }
+
+    # Overheat handling always outranks updating the very script doing the
+    # handling - never even check, let alone stage or install, while a
+    # sensor is mid-way through its Stage 2/3 timer.
+    if ($script:AnyStageCriticalActive) {
+        return
+    }
 
     $now = Get-Date
     if ($script:LastUpdateCheck -and (($now - $script:LastUpdateCheck).TotalHours -lt $UpdateCheckIntervalHours)) {
@@ -1135,17 +1223,290 @@ function Invoke-UpdateCheck {
         return
     }
 
-    if ($script:LastAlertedUpdateVersion -eq $remoteTag) {
-        # Already alerted this exact version this run - don't re-alert every
-        # interval while the user just hasn't updated yet.
+    $changelog = ConvertTo-SafeAlertText -Text ([string]$release.body)
+
+    if ($script:LastAlertedUpdateVersion -ne $remoteTag) {
+        $script:LastAlertedUpdateVersion = $remoteTag
+        Write-Log "Update check    [INFO] New version available: $remoteTag (running $ScriptVersion)" "WARN"
+        if ($changelog) {
+            Write-Log "Update check    Changelog: $changelog"
+        }
+        $body = if ($changelog) { "$remoteTag is out, you're on $ScriptVersion. $changelog" } `
+                else            { "$remoteTag is out, you're on $ScriptVersion." }
+        Send-Alert -Title "ThermalGuard update available" `
+            -Body "$body https://github.com/$UpdateCheckRepo/releases/latest" `
+            -Priority "default"
+    }
+
+    if (-not $EnableAutoDownload) { return }
+    if ($script:LastStagedUpdateVersion -eq $remoteTag) {
+        # Already staged (or already tried and failed to stage) this exact
+        # version - don't re-download every check interval.
         return
     }
-    $script:LastAlertedUpdateVersion = $remoteTag
+    $script:LastStagedUpdateVersion = $remoteTag
 
-    Write-Log "Update check    [INFO] New version available: $remoteTag (running $ScriptVersion)" "WARN"
-    Send-Alert -Title "ThermalGuard update available" `
-        -Body "$remoteTag is out, you're on $ScriptVersion. https://github.com/$UpdateCheckRepo/releases/latest" `
-        -Priority "default"
+    Invoke-StageUpdate -Release $release -RemoteTag $remoteTag -RemoteVersion $remoteVersion
+}
+
+# === UPDATE INSTALL (staging, syntax validation, backup, swap, rollback) ======
+# Everything below this point is only reachable when $EnableAutoDownload
+# and/or $EnableAutoInstall are turned on, or when this script is invoked
+# directly with -InstallPendingUpdate (see Approve-ThermalGuardUpdate.ps1).
+# Off by default; see the config block near the top of this file.
+
+function Get-ThermalGuardUpdatePaths {
+    param([string]$Version)
+
+    $livePath = $PSCommandPath
+    if (-not $livePath) {
+        # Should not happen in normal operation (this script is always
+        # launched via -File from Start-HWiNFO-Remote.bat / the Scheduled
+        # Task), but fall back to the configured ToolsDir install location
+        # rather than crash if it's ever dot-sourced or pasted interactively.
+        $livePath = Join-Path $ToolsDir "HWiNFO-ThermalGuard\HWiNFO-ThermalGuard.ps1"
+    }
+
+    $dir      = Split-Path $livePath -Parent
+    $baseName = [System.IO.Path]::GetFileNameWithoutExtension($livePath)
+
+    $result = @{
+        LivePath = $livePath
+        Dir      = $dir
+        BaseName = $baseName
+    }
+    if ($Version) {
+        $result.BackupPath  = Join-Path $dir "$baseName.backup-v$Version.ps1"
+        $result.PendingPath = Join-Path $dir "$baseName.pending-v$Version.ps1"
+    }
+    return $result
+}
+
+function Test-ScriptSyntaxValid {
+    # Parses (but never executes) the given file using the same parser
+    # PowerShell itself uses to load a script, surfacing any syntax error
+    # (unbalanced braces/quotes, the PS7 "$var:" scope-operator collision
+    # class of bug seen earlier in this project's history, etc.) before the
+    # file is ever put in the position the live, running script occupies.
+    param([string]$Path)
+
+    $tokens = $null
+    $errors = $null
+    try {
+        [void][System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$tokens, [ref]$errors)
+    } catch {
+        Write-Log "Update install  [ERROR] Parser threw while validating $Path : $_" "ERROR"
+        return $false
+    }
+
+    if ($errors -and $errors.Count -gt 0) {
+        foreach ($e in $errors) {
+            Write-Log "Update install  [ERROR] Syntax error in staged update: $($e.Message) (line $($e.Extent.StartLineNumber))" "ERROR"
+        }
+        return $false
+    }
+    return $true
+}
+
+function Invoke-StageUpdate {
+    param($Release, [string]$RemoteTag, [version]$RemoteVersion)
+
+    $paths = Get-ThermalGuardUpdatePaths -Version $RemoteVersion.ToString()
+    Write-Log "Update install  Staging $RemoteTag ..."
+
+    # Prefer an attached release asset with the exact same filename as the
+    # live script; fall back to the raw file at that tag if the release has
+    # no attached assets (e.g. GitHub's auto-generated source zip only).
+    $liveFileName = Split-Path $paths.LivePath -Leaf
+    $asset        = $Release.assets | Where-Object { $_.name -eq $liveFileName } | Select-Object -First 1
+    $downloadUrl  = if ($asset) { $asset.browser_download_url } `
+                    else        { "https://raw.githubusercontent.com/$UpdateCheckRepo/$RemoteTag/$liveFileName" }
+
+    $tempFile = Join-Path $env:TEMP "thermalguard-update-$RemoteTag.ps1"
+    try {
+        Write-Log "Update install  Downloading: $downloadUrl"
+        Invoke-WebRequest -Uri $downloadUrl -OutFile $tempFile -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop
+    } catch {
+        Write-Log "Update install  [ERROR] Download failed: $_" "ERROR"
+        Send-Alert -Title "ThermalGuard update download failed" -Body "$RemoteTag could not be downloaded: $_" -Priority "high"
+        Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+        return
+    }
+
+    if (-not (Test-ScriptSyntaxValid -Path $tempFile)) {
+        Write-Log "Update install  [ERROR] Downloaded $RemoteTag failed syntax validation, NOT staging it." "ERROR"
+        Send-Alert -Title "ThermalGuard update rejected" `
+            -Body "$RemoteTag failed syntax validation after download and was not installed. Still running $ScriptVersion." `
+            -Priority "high"
+        Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+        return
+    }
+
+    try {
+        if (Test-Path $paths.LivePath) {
+            Copy-Item -Path $paths.LivePath -Destination $paths.BackupPath -Force -ErrorAction Stop
+            Write-Log "Update install  Backed up current v$ScriptVersion to $($paths.BackupPath)"
+        }
+        Move-Item -Path $tempFile -Destination $paths.PendingPath -Force -ErrorAction Stop
+        Write-Log "Update install  [OK] Staged $RemoteTag as $($paths.PendingPath)"
+    } catch {
+        Write-Log "Update install  [ERROR] Could not stage files: $_" "ERROR"
+        Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+        return
+    }
+
+    # Rotate old backups beyond the configured retention count.
+    try {
+        $backupPattern = Join-Path $paths.Dir "$($paths.BaseName).backup-v*.ps1"
+        $oldBackups = Get-ChildItem -Path $backupPattern -ErrorAction SilentlyContinue |
+                      Sort-Object LastWriteTime -Descending |
+                      Select-Object -Skip $UpdateBackupsToKeep
+        foreach ($old in $oldBackups) {
+            Remove-Item $old.FullName -Force -ErrorAction SilentlyContinue
+            Write-Log "Update install  Rotated out old backup: $($old.Name)"
+        }
+    } catch {
+        Write-Log "Update install  [WARN] Backup rotation failed (non-fatal): $_" "WARN"
+    }
+
+    if ($EnableAutoInstall) {
+        Write-Log "Update install  EnableAutoInstall is on, launching installer for $RemoteTag ..."
+        Send-Alert -Title "ThermalGuard installing update" `
+            -Body "$RemoteTag downloaded and validated, installing now. Will roll back automatically if it fails to come up healthy." `
+            -Priority "default"
+        try {
+            Start-Process -FilePath (Get-Process -Id $PID).Path `
+                -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$($paths.LivePath)`" -InstallPendingUpdate" `
+                -WindowStyle Hidden
+        } catch {
+            Write-Log "Update install  [ERROR] Could not launch installer process: $_" "ERROR"
+        }
+    } else {
+        Send-Alert -Title "ThermalGuard update staged" `
+            -Body "$RemoteTag downloaded and validated. Run Approve-ThermalGuardUpdate.ps1 to install it." `
+            -Priority "default"
+    }
+}
+
+function Install-ThermalGuardUpdate {
+    # Standalone install routine: stop -> swap -> restart -> health check ->
+    # rollback-if-unhealthy. Deliberately written to be safe to run as either
+    # a detached child process spawned by the currently-running (old, known
+    # good) ThermalGuard instance, OR as a manual approval step via
+    # Approve-ThermalGuardUpdate.ps1 - in both cases it is a SEPARATE process
+    # from whatever it is about to replace, which is what makes the health
+    # check and rollback meaningful (a process cannot reliably supervise
+    # replacing its own running code and then judge whether that worked).
+    $paths = Get-ThermalGuardUpdatePaths
+
+    $pendingPattern = Join-Path $paths.Dir "$($paths.BaseName).pending-v*.ps1"
+    $pending = Get-ChildItem -Path $pendingPattern -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $pending) {
+        Write-Log "Update install  [INFO] No staged update found (looked for $pendingPattern). Nothing to do."
+        return
+    }
+
+    if ($pending.Name -match '\.pending-v([\d\.]+)\.ps1$') {
+        $newVersion = $matches[1]
+    } else {
+        Write-Log "Update install  [ERROR] Could not parse version out of staged filename: $($pending.Name)" "ERROR"
+        return
+    }
+    $backupPath = Join-Path $paths.Dir "$($paths.BaseName).backup-v$newVersion.ps1"
+    $oldBackupForRollback = Join-Path $paths.Dir "$($paths.BaseName).backup-v$ScriptVersion.ps1"
+    # The backup made during staging carries the version that was live AT
+    # STAGING TIME, which is $ScriptVersion of the process that staged it -
+    # not necessarily this installer process's own $ScriptVersion (this
+    # installer process is running off the OLD file when invoked via
+    # -InstallPendingUpdate, since it has not swapped anything in yet).
+    $rollbackSource = if (Test-Path $oldBackupForRollback) { $oldBackupForRollback } else { $backupPath }
+
+    Write-Log "Update install  Installing staged update: $($pending.Name) -> $($paths.LivePath)"
+
+    $taskName = $ThermalGuardTaskName
+    try {
+        Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    } catch { }
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match '(?i)-File\s+.*HWiNFO-ThermalGuard\.ps1' -and $_.ProcessId -ne $PID } |
+        ForEach-Object {
+            try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch { }
+        }
+    Start-Sleep -Seconds 2
+
+    try {
+        Copy-Item -Path $pending.FullName -Destination $paths.LivePath -Force -ErrorAction Stop
+        Remove-Item -Path $pending.FullName -Force -ErrorAction SilentlyContinue
+    } catch {
+        Write-Log "Update install  [ERROR] Could not copy staged file into place: $_" "ERROR"
+        Send-Alert -Title "ThermalGuard update failed" -Body "Could not install v$newVersion : $_" -Priority "urgent"
+        try { Start-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue } catch { }
+        return
+    }
+
+    $restartTime = Get-Date
+    try {
+        Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
+    } catch {
+        Write-Log "Update install  [ERROR] Could not start scheduled task after swap: $_" "ERROR"
+    }
+
+    Write-Log "Update install  Waiting up to ${UpdateHealthCheckTimeoutSec}s for v$newVersion to come up healthy..."
+    $healthy = $false
+    $deadline = $restartTime.AddSeconds($UpdateHealthCheckTimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 3
+        if (-not (Test-Path $LogFile)) { continue }
+        $tail = Get-Content $LogFile -Tail 60 -ErrorAction SilentlyContinue
+        $successLine = $tail | Where-Object { $_ -match '=== Software Check complete ===' } | Select-Object -Last 1
+        if ($successLine -and $successLine -match '^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]') {
+            try {
+                $lineTime = [datetime]::ParseExact($matches[1], 'yyyy-MM-dd HH:mm:ss', $null)
+                if ($lineTime -ge $restartTime) { $healthy = $true; break }
+            } catch { }
+        }
+    }
+
+    if ($healthy) {
+        Write-Log "Update install  [OK] v$newVersion is up and healthy."
+        Send-Alert -Title "ThermalGuard updated" -Body "Successfully installed v$newVersion." -Priority "default"
+        return
+    }
+
+    Write-Log "Update install  [ERROR] v$newVersion did not become healthy within ${UpdateHealthCheckTimeoutSec}s. Rolling back..." "ERROR"
+    Send-Alert -Title "ThermalGuard update failed, rolling back" `
+        -Body "v$newVersion did not start correctly. Restoring the previous working version." -Priority "urgent"
+
+    try {
+        Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    } catch { }
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match '(?i)-File\s+.*HWiNFO-ThermalGuard\.ps1' -and $_.ProcessId -ne $PID } |
+        ForEach-Object {
+            try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch { }
+        }
+    Start-Sleep -Seconds 2
+
+    if (Test-Path $rollbackSource) {
+        try {
+            Copy-Item -Path $rollbackSource -Destination $paths.LivePath -Force -ErrorAction Stop
+            Write-Log "Update install  Restored $rollbackSource back to $($paths.LivePath)"
+        } catch {
+            Write-Log "Update install  [FATAL] Rollback copy itself failed: $_" "ERROR"
+            Send-Alert -Title "ThermalGuard rollback FAILED" `
+                -Body "Manual intervention needed: restore $rollbackSource to $($paths.LivePath) by hand." -Priority "urgent"
+        }
+    } else {
+        Write-Log "Update install  [FATAL] No backup file found at $rollbackSource to roll back to!" "ERROR"
+        Send-Alert -Title "ThermalGuard rollback FAILED" `
+            -Body "No backup found. Manual intervention needed at $($paths.LivePath)." -Priority "urgent"
+    }
+
+    try {
+        Start-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    } catch {
+        Write-Log "Update install  [ERROR] Could not restart scheduled task after rollback: $_" "ERROR"
+    }
 }
 
 
@@ -1766,11 +2127,33 @@ function Start-ThermalGuard {
             }
         }
 
+        # Exposed for Invoke-UpdateCheck / Invoke-StageUpdate / Install-ThermalGuardUpdate:
+        # never stage or install an update while a sensor is actively mid-way
+        # through the Stage 2/3 timer. Overheat handling always outranks
+        # updating the script that is doing the handling.
+        $script:AnyStageCriticalActive = ($triggerTimestamps.Count -gt 0)
+
         Start-Sleep -Seconds $PollInterval
     }
 }
 
 # === START ====================================================================
+if ($InstallPendingUpdate) {
+    # Installer-only mode: never runs the thermal monitoring loop. Used by
+    # Approve-ThermalGuardUpdate.ps1 and internally when $EnableAutoInstall
+    # spawns this same script as a detached child process to perform the
+    # stop/swap/restart/health-check/rollback sequence.
+    Write-Log "=========================================="
+    Write-Log "HWiNFO Thermal Guard v$ScriptVersion - running in -InstallPendingUpdate mode"
+    Write-Log "=========================================="
+    try {
+        Install-ThermalGuardUpdate
+    } catch {
+        Write-Log "Update install  [FATAL] Installer itself crashed: $_" "ERROR"
+    }
+    exit 0
+}
+
 try {
     Start-ThermalGuard
 } catch {
