@@ -1,6 +1,14 @@
 @echo off
 :: ============================================================================
-:: HWiNFO Thermal Guard - Autostart Launcher v1.42
+:: HWiNFO Thermal Guard - Autostart Launcher v1.51
+::
+:: v1.51: the Scheduled Task (Install-ScheduledTask.ps1) now re-runs this file
+:: every few minutes as a self-heal. If the guard is already running, this file
+:: exits silently (STEP 0) so autostart.log keeps the log of the last REAL start.
+:: The duplicate check ignores installer / dry-run instances of the script
+:: (-InstallPendingUpdate, -DryRun, -SimulateTemp): before, the update installer
+:: itself counted as "ThermalGuard already running" and blocked the restart of
+:: the freshly installed version.
 ::
 :: ARCHITECTURE CHANGE: this file no longer starts or checks HWiNFO64,
 :: RemoteHWInfo or fipha itself. HWiNFO-ThermalGuard.ps1 is now the single
@@ -24,10 +32,20 @@ set "LOGDIR=%USERPROFILE%\HWiNFO-ThermalGuard"
 set "LOGFILE=%LOGDIR%\autostart.log"
 
 if not exist "%LOGDIR%" mkdir "%LOGDIR%" >nul 2>&1
+
+:: --- STEP 0: silent fast path (Scheduled Task repetition) -------------------
+:: Normal case on every repetition: the guard is already running, so leave
+:: without touching the log. If this check cannot run at all (no PowerShell
+:: found, check crashed) it just falls through to the full flow below.
+set "PS_QUICK=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+if exist "%ProgramFiles%\PowerShell\7\pwsh.exe" set "PS_QUICK=%ProgramFiles%\PowerShell\7\pwsh.exe"
+"%PS_QUICK%" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "if (Get-CimInstance Win32_Process | Where-Object { ($_.Name -ieq 'powershell.exe' -or $_.Name -ieq 'pwsh.exe') -and $_.CommandLine -match '(?i)-File\s+.*HWiNFO-ThermalGuard\.ps1' -and $_.CommandLine -notmatch '(?i)-(InstallPendingUpdate|DryRun|SimulateTemp)' }) { exit 0 } else { exit 1 }" >nul 2>&1
+if %ERRORLEVEL% EQU 0 exit /b 0
+
 echo. > "%LOGFILE%"
 
 call :log "=========================================================="
-call :log "HWiNFO Thermal Guard - Autostart begin (launcher v1.42)"
+call :log "HWiNFO Thermal Guard - Autostart begin (launcher v1.51)"
 call :log "Script dir: %SCRIPT_DIR%"
 call :log "=========================================================="
 
@@ -77,7 +95,7 @@ call :log "  - Unblock pass complete."
 :: them, eliminating the duplicate-orchestration and fipha race-condition
 :: issues that existed when both files managed the same processes.
 call :log "STEP 4: ThermalGuard..."
-"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "if (Get-CimInstance Win32_Process | Where-Object { ($_.Name -ieq 'powershell.exe' -or $_.Name -ieq 'pwsh.exe') -and $_.CommandLine -match '(?i)-File\s+.*HWiNFO-ThermalGuard\.ps1' }) { exit 0 } else { exit 1 }"
+"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "if (Get-CimInstance Win32_Process | Where-Object { ($_.Name -ieq 'powershell.exe' -or $_.Name -ieq 'pwsh.exe') -and $_.CommandLine -match '(?i)-File\s+.*HWiNFO-ThermalGuard\.ps1' -and $_.CommandLine -notmatch '(?i)-(InstallPendingUpdate|DryRun|SimulateTemp)' }) { exit 0 } else { exit 1 }"
 if %ERRORLEVEL% EQU 0 (
     call :log "  - Already running. Skipping."
     goto :done
@@ -88,7 +106,7 @@ start "" /min "%PS_EXE%" -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass 
 call :log "  - start command issued (errorlevel %ERRORLEVEL%). Waiting 5s to verify..."
 timeout /t 5 /nobreak >nul
 
-"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "if (Get-CimInstance Win32_Process | Where-Object { ($_.Name -ieq 'powershell.exe' -or $_.Name -ieq 'pwsh.exe') -and $_.CommandLine -match '(?i)-File\s+.*HWiNFO-ThermalGuard\.ps1' }) { exit 0 } else { exit 1 }"
+"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "if (Get-CimInstance Win32_Process | Where-Object { ($_.Name -ieq 'powershell.exe' -or $_.Name -ieq 'pwsh.exe') -and $_.CommandLine -match '(?i)-File\s+.*HWiNFO-ThermalGuard\.ps1' -and $_.CommandLine -notmatch '(?i)-(InstallPendingUpdate|DryRun|SimulateTemp)' }) { exit 0 } else { exit 1 }"
 if %ERRORLEVEL% EQU 0 (
     call :log "  - ThermalGuard confirmed running."
 ) else (

@@ -20,8 +20,21 @@ param(
     # Approve-ThermalGuardUpdate.ps1 for manual approval, and internally by
     # this same script when $EnableAutoInstall = $true. Never runs the
     # thermal monitoring loop itself when this switch is present.
-    [switch]$InstallPendingUpdate
+    [switch]$InstallPendingUpdate,
+
+    # Simulation mode: runs the normal monitoring loop, but Stage 2 (kill)
+    # and Stage 3 (shutdown) only LOG what they would do. Alerts (toast/ntfy)
+    # are still sent, with a DRYRUN prefix, so the notification path can be
+    # tested too. The watchdog, update check and update installer are off.
+    [switch]$DryRun,
+
+    # Pretends the CPU temperature is this many degrees C (overrides the real
+    # reading of "CPU Tctl/Tdie"). Always implies -DryRun, so it can never
+    # cause a real kill/shutdown. Example: -SimulateTemp 95
+    [double]$SimulateTemp = [double]::NaN
 )
+
+if (-not [double]::IsNaN($SimulateTemp)) { $DryRun = [switch]$true }
 
 # --- VERSION ---------------------------------------------------------------
 # Single source of truth for the version number, used in the startup log
@@ -34,7 +47,14 @@ param(
 # the existing v1.49 detect-only update check. See $EnableAutoDownload /
 # $EnableAutoInstall in the config block below, and
 # Approve-ThermalGuardUpdate.ps1 for the manual-approval path.
-$ScriptVersion = "1.50"
+#
+# v1.51: update installer fixes (installer no longer blocked by the launcher's
+# duplicate check, real health marker instead of "Software Check complete",
+# rollback always restores the file that was live before the swap, SHA-256
+# verification of downloads), data-loss fail-safe, GPU Fan2, temperature unit
+# filter, -DryRun / -SimulateTemp, ntfy auth, log retention, Tls11 removed,
+# fipha off by default. See README.
+$ScriptVersion = "1.51"
 
 # --- TLS (GLOBAL, EARLY) -----------------------------------------------------
 # PowerShell 5.1 / .NET Framework does not always default to TLS 1.2, which
@@ -46,9 +66,9 @@ $ScriptVersion = "1.50"
 # gets it, not just BurntToast's.
 try {
     [System.Net.ServicePointManager]::SecurityProtocol = `
-        [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls11
+        [System.Net.SecurityProtocolType]::Tls12
 } catch {
-    # Older .NET Framework builds may not expose Tls11/Tls12 constants at all;
+    # Older .NET Framework builds may not expose the Tls12 constant at all;
     # in that case just leave the OS default in place rather than crash.
 }
 
@@ -60,8 +80,8 @@ try {
 # the Desktop or in a Downloads folder - those are intentionally NOT scanned
 # automatically any more (security hardening, see report finding #19).
 $HWiNFO_Path       = ""
-$RemoteHWInfo_Path = "C:\Tools\RemoteHWInfo_v0.5\remotehwinfo.exe"
-$Fipha_Path        = "C:\Tools\fip-ha-0.0.2.0\fipha.exe"
+$RemoteHWInfo_Path = ""
+$Fipha_Path        = ""
 
 # --- GPU PROFILE --------------------------------------------------------------
 # "AUTO"   -> auto-detect NVIDIA or AMD
@@ -73,11 +93,22 @@ $GPUProfile = "AUTO"
 $EnableCPU   = $true
 $EnableGPU   = $true
 $EnableNtfy  = $false
-$EnableFipha = $true
+# fipha (github.com/mhwlng/fipha) publishes HWiNFO sensors to Home Assistant
+# via MQTT discovery. Optional extra, NOT part of the thermal protection, off
+# by default. If you turn it on, it needs its own mqtt.config next to fipha.exe.
+$EnableFipha = $false
 
 # --- ntfy ----------------------------------------------------------------------
 $NTFY_URL   = "https://ntfy.sh"
 $NTFY_TOPIC = "ha-thermalguard-yourname"
+
+# Only needed if your ntfy server requires authentication for publishing.
+# Preferred: an access token ("tk_..."), sent as "Authorization: Bearer".
+# Alternative: username + password (HTTP Basic). Leave all three empty for
+# an open topic. Token wins if both are set.
+$NTFY_Token    = ""
+$NTFY_User     = ""
+$NTFY_Password = ""
 
 # --- UPDATE CHECK ----------------------------------------------------------------
 # Checks GitHub's "latest release" API against $ScriptVersion and sends one
@@ -117,6 +148,19 @@ $UpdateCheckIntervalHours = 24
 # takes priority over updating itself.
 $EnableAutoDownload = $false
 $EnableAutoInstall  = $false
+
+# Integrity check of the downloaded script. The release must carry a SHA-256
+# for the script: either an asset named "<script>.sha256" (contents: the hash,
+# optionally followed by the file name) or a "SHA256SUMS" asset in the usual
+# "<hash>  <file>" format.
+#   $true (default) - no verifiable hash means the update is NOT staged.
+#   $false          - an update without hash may still be staged, but it is
+#                     marked UNVERIFIED and is NEVER auto-installed, even
+#                     with $EnableAutoInstall = $true (manual approval only).
+# Note: the hash comes from the same release as the file, so it protects
+# against a corrupted or tampered download, not against a compromised repo
+# or maintainer account.
+$UpdateRequireHash = $true
 
 # How many backup generations to keep as "<script>.backup-vX.Y.ps1" files
 # next to the live script. Oldest beyond this count are deleted automatically
@@ -185,6 +229,15 @@ $BoardRamLabelPattern = '(?i)(mainboard|motherboard|\bsystem\b|\bpch\b|chipset|d
 # note (avoids the BOM/codepage corruption class of bug already fixed once).
 $script:DegreeSign   = [char]0x00B0
 $TempUnitPattern     = "(?i)^\s*($($script:DegreeSign)c|deg\s*c|c)\s*`$"
+
+# Unit filter for the DEDICATED CPU/GPU temperature sensors (hard filter, see
+# Find-SensorValueSingle): a reading whose unit is not a temperature is never
+# used as one, e.g. "CPU Package" must not resolve to "CPU Package Power" (W).
+# Deliberately looser than $TempUnitPattern above: it accepts up to 3 non-space
+# characters before the C, so it still matches when the degree sign arrives
+# garbled by an encoding mismatch (e.g. "?C" or a two-character mojibake), but
+# it still rejects W, V, A, RPM, MHz, %, MB, Yes/No and so on.
+$DedicatedTempUnitPattern = '(?i)^\s*(deg\s*c|\S{0,3}c)\s*$'
 
 # --- THRESHOLDS ------------------------------------------------------------
 # Two ways to set CPU/GPU Warn+Crit, pick one:
@@ -261,6 +314,20 @@ $PerfLimitFlagsToWatch = @(
 # the next digest instead of firing individually.
 $InfoAlertCooldownMinutes = 45
 
+# --- DATA-LOSS FAIL-SAFE ----------------------------------------------------------
+# If the script cannot read a valid CPU/GPU temperature at all (endpoint down,
+# HWiNFO crashed, sensor label gone) it is blind. Alerts alone do not protect
+# the hardware in that state, so after a grace period it falls back to the same
+# two stages as a real overheat: kill the Stage-2 process list, then shut down.
+# "Blind" = the primary temperature sensors (CPU Tctl/Tdie if CPU monitoring is
+# on, GPU Temperature if GPU monitoring is on) have no valid reading. The
+# counter resets as soon as data is back. Normal watchdog restarts of HWiNFO
+# take well under the first limit, so they do not trigger this.
+# Set $EnableDataLossFailsafe = $false to get the old behavior (alert only).
+$EnableDataLossFailsafe = $true
+$DataLossStage2Sec      = 180
+$DataLossShutdownSec    = 420
+
 # --- TIMING --------------------------------------------------------------------
 $PollInterval = 5
 $Stage2Delay  = 30
@@ -310,6 +377,15 @@ $EndpointUnhealthyCyclesBeforeRestart = 3
 $EnableFirewallHardening = $true
 $RemoteHWInfoPort        = 60000
 
+# DryRun / SimulateTemp: this instance must never touch processes, restart
+# anything or update itself - it only evaluates and logs.
+if ($DryRun) {
+    $EnableWatchdog     = $false
+    $EnableUpdateCheck  = $false
+    $EnableAutoDownload = $false
+    $EnableAutoInstall  = $false
+}
+
 # === INTERNAL CONFIGURATION (do not edit) ====================================
 
 $MissingSensorAlertAfterPolls      = 3
@@ -318,6 +394,13 @@ $EndpointAlertIntervalMinutes      = 15
 $LogDir       = "$env:USERPROFILE\HWiNFO-ThermalGuard"
 $LogFile      = Join-Path $LogDir "thermalguard.log"
 $MaxLogSizeMB = 10
+$MaxLogFilesToKeep = 10   # rotated thermalguard_*.log files kept besides the live log
+
+# Written to the log by the main loop on the first poll in which all primary
+# temperature sensors (CPU / GPU) have a valid reading. The update installer
+# waits for exactly this line (with a timestamp after the restart) before it
+# calls an update healthy.
+$HealthMarkerText = "HEALTHY: first successful sensor poll"
 
 # === LOGGING (must be defined before anything else can call it) =============
 
@@ -343,6 +426,13 @@ function Write-Log {
     if ((Test-Path $LogFile) -and ((Get-Item $LogFile).Length / 1MB) -gt $MaxLogSizeMB) {
         $backup = $LogFile -replace '\.log$', "_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
         Move-Item $LogFile $backup -Force
+        try {
+            $keepLogs = [Math]::Max(1, $MaxLogFilesToKeep)
+            Get-ChildItem -Path $LogDir -Filter 'thermalguard_*.log' -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending |
+                Select-Object -Skip $keepLogs |
+                Remove-Item -Force -ErrorAction SilentlyContinue
+        } catch { }
     }
 }
 
@@ -620,6 +710,10 @@ function Detect-GPUProfile {
     return $null
 }
 
+# Installer-only mode never reads sensors, so GPU detection (and its hard exit
+# when no GPU is found) must not be able to block an update or a rollback.
+if ($InstallPendingUpdate -and $GPUProfile -eq "AUTO") { $GPUProfile = "NVIDIA" }
+
 if ($GPUProfile -eq "AUTO") {
     $detected = Detect-GPUProfile
     if ($detected) {
@@ -639,6 +733,9 @@ $GPUProfiles = @{
         TempCrit         = $GPU_CritTemp
         HotspotMatch     = $null
         FanMatch         = "GPU Fan1"
+        # RTX 50 cards report a second fan. Optional + armed-after-spinning,
+        # see the "GPU Fan 2" sensor entry below.
+        Fan2Match        = "GPU Fan2"
         FanWarn          = $GPU_FanWarnRPM
         FanCrit          = $GPU_FanCritRPM
         LoadMatch        = "GPU Core Load"
@@ -739,6 +836,19 @@ if ($EnableGPU) {
         WarnThreshold = $p.FanWarn; CritThreshold = $p.FanCrit
         Type = "fan"; Group = "GPU"
         PreferredSensorIndex = $script:DetectedGPUSensorIndex
+    }
+    if ($p.Fan2Match) {
+        # Optional: not every card has (or reports) a second fan, so a missing
+        # reading is no alert. Armed-after-spinning: it is only evaluated once
+        # it has been seen above 0 RPM in this run, so a phantom 0 RPM reading
+        # on a card without a real second fan can never trigger Stage 2/3.
+        $Sensors += @{
+            Name = "GPU Fan 2"; SensorMatch = $p.Fan2Match
+            WarnThreshold = $p.FanWarn; CritThreshold = $p.FanCrit
+            Type = "fan"; Group = "GPU"
+            PreferredSensorIndex = $script:DetectedGPUSensorIndex
+            Optional = $true
+        }
     }
 }
 
@@ -862,7 +972,7 @@ function Test-Requirements {
         for ($attempt = 0; $attempt -le $ntfyDelays.Count; $attempt++) {
             try {
                 Invoke-RestMethod -Uri "$NTFY_URL/$NTFY_TOPIC" -Method Post -Body "ThermalGuard started" `
-                    -Headers @{ "Title" = "ThermalGuard started"; "Tags" = "white_check_mark" } `
+                    -Headers (Get-NtfyHeaders -Title "ThermalGuard started" -Tags "white_check_mark") `
                     -TimeoutSec 5 | Out-Null
                 Write-Log "ntfy            [OK] $NTFY_URL/$NTFY_TOPIC"
                 $ntfyOk = $true
@@ -920,6 +1030,23 @@ function Test-Requirements {
 
 # === NOTIFICATIONS ============================================================
 
+function Get-NtfyHeaders {
+    # One place for all ntfy headers, including optional authentication.
+    # Token (Bearer) wins over user/password (Basic); both empty = open topic.
+    param([string]$Title, [string]$Priority = $null, [string]$Tags = $null)
+
+    $h = @{ "Title" = $Title }
+    if ($Priority) { $h["Priority"] = $Priority }
+    if ($Tags)     { $h["Tags"]     = $Tags }
+    if ($NTFY_Token) {
+        $h["Authorization"] = "Bearer $NTFY_Token"
+    } elseif ($NTFY_User -and $NTFY_Password) {
+        $pair = [System.Text.Encoding]::UTF8.GetBytes("${NTFY_User}:${NTFY_Password}")
+        $h["Authorization"] = "Basic " + [Convert]::ToBase64String($pair)
+    }
+    return $h
+}
+
 function Send-Toast {
     param([string]$Title, [string]$Body)
     try {
@@ -936,7 +1063,7 @@ function Send-Ntfy {
     if (-not $EnableNtfy) { return }
     try {
         Invoke-RestMethod -Uri "$NTFY_URL/$NTFY_TOPIC" -Method Post -Body $Body `
-            -Headers @{ "Title" = $Title; "Priority" = $Priority; "Tags" = "warning,thermometer" } `
+            -Headers (Get-NtfyHeaders -Title $Title -Priority $Priority -Tags "warning,thermometer") `
             -TimeoutSec 5 | Out-Null
         Write-Log "ntfy sent: $Title"
     } catch {
@@ -1148,6 +1275,7 @@ function Invoke-PerfLimitCheck {
 
 function Send-Alert {
     param([string]$Title, [string]$Body, [string]$Priority = "high")
+    if ($DryRun) { $Title = "[DRYRUN] $Title" }
     Send-Toast -Title $Title -Body $Body
     Send-Ntfy  -Title $Title -Body $Body -Priority $Priority
 }
@@ -1244,9 +1372,13 @@ function Invoke-UpdateCheck {
         # version - don't re-download every check interval.
         return
     }
-    $script:LastStagedUpdateVersion = $remoteTag
 
-    Invoke-StageUpdate -Release $release -RemoteTag $remoteTag -RemoteVersion $remoteVersion
+    $handled = Invoke-StageUpdate -Release $release -RemoteTag $remoteTag -RemoteVersion $remoteVersion |
+               Select-Object -Last 1
+    # Only remember the version when it was dealt with for good (staged or
+    # definitively rejected). A transient failure such as a dropped download
+    # is retried at the next check instead of being blocked until restart.
+    if ($handled -eq $true) { $script:LastStagedUpdateVersion = $remoteTag }
 }
 
 # === UPDATE INSTALL (staging, syntax validation, backup, swap, rollback) ======
@@ -1256,7 +1388,7 @@ function Invoke-UpdateCheck {
 # Off by default; see the config block near the top of this file.
 
 function Get-ThermalGuardUpdatePaths {
-    param([string]$Version)
+    param([string]$Version, [string]$BackupVersion)
 
     $livePath = $PSCommandPath
     if (-not $livePath) {
@@ -1276,8 +1408,14 @@ function Get-ThermalGuardUpdatePaths {
         BaseName = $baseName
     }
     if ($Version) {
-        $result.BackupPath  = Join-Path $dir "$baseName.backup-v$Version.ps1"
         $result.PendingPath = Join-Path $dir "$baseName.pending-v$Version.ps1"
+    }
+    if ($BackupVersion) {
+        # Named after the version the backed-up file CONTAINS (the one live
+        # right now), not after the version that replaces it. It used to be
+        # the other way round, which made the second update roll back to the
+        # wrong file.
+        $result.BackupPath = Join-Path $dir "$baseName.backup-v$BackupVersion.ps1"
     }
     return $result
 }
@@ -1308,11 +1446,120 @@ function Test-ScriptSyntaxValid {
     return $true
 }
 
+function Get-VersionFromFileName {
+    # "<base>.pending-v1.51.ps1" / "<base>.backup-v1.50.ps1" -> [version] 1.51 / 1.50.
+    # Unparsable names sort last (0.0).
+    param([string]$Name)
+    if ($Name -match '-v([\d\.]+?)\.ps1$') {
+        try { return [version]$matches[1] } catch { }
+    }
+    return [version]'0.0'
+}
+
+function Get-SortedVersionedFiles {
+    # Newest version first. Sorted by the version in the file NAME, not by
+    # LastWriteTime: Copy-Item keeps the source file's timestamp, so a fresh
+    # backup of an old file would otherwise look "old".
+    param([string]$Pattern)
+    $files = @(Get-ChildItem -Path $Pattern -ErrorAction SilentlyContinue)
+    return @($files | Sort-Object -Property @{ Expression = { Get-VersionFromFileName $_.Name }; Descending = $true })
+}
+
+function Get-ExpectedUpdateHash {
+    # Looks for a SHA-256 for $FileName among the release assets:
+    #   "<file>.sha256" / "<file>.sha256.txt"  -> first 64-hex string in it
+    #   "SHA256SUMS" / "SHA256SUMS.txt"        -> line "<hash>  <file>"
+    # Returns the lowercase hash, or $null if no usable one was found.
+    param($Release, [string]$FileName)
+
+    $names = @("$FileName.sha256", "$FileName.sha256.txt", "SHA256SUMS", "SHA256SUMS.txt", "sha256sums.txt")
+    foreach ($n in $names) {
+        $asset = $Release.assets | Where-Object { $_.name -ieq $n } | Select-Object -First 1
+        if (-not $asset) { continue }
+
+        try {
+            $resp    = Invoke-WebRequest -Uri $asset.browser_download_url -UseBasicParsing -TimeoutSec 20 -ErrorAction Stop
+            $content = $resp.Content
+            if ($content -is [byte[]]) { $content = [System.Text.Encoding]::UTF8.GetString($content) }
+            $content = [string]$content
+        } catch {
+            Write-Log "Update install  [WARN] Could not download hash asset '$n': $_" "WARN"
+            continue
+        }
+
+        $perFile = ($n -ieq "$FileName.sha256") -or ($n -ieq "$FileName.sha256.txt")
+        foreach ($line in ($content -split '\r?\n')) {
+            if ($perFile) {
+                if ($line -match '(?i)\b([a-f0-9]{64})\b') { return $matches[1].ToLowerInvariant() }
+            } elseif ($line -match '(?i)^\s*([a-f0-9]{64})\s+\*?(.+?)\s*$') {
+                $hashPart = $matches[1]
+                $namePart = $matches[2]
+                if ((Split-Path $namePart -Leaf) -ieq $FileName) { return $hashPart.ToLowerInvariant() }
+            }
+        }
+    }
+    return $null
+}
+
+function Set-GuardTaskEnabled {
+    # Disabling the task while files are swapped keeps its repetition trigger
+    # from launching a half-updated guard in the middle of the swap. No-op
+    # when no scheduled task exists (shell:startup setups).
+    param([bool]$Enabled)
+    try {
+        $task = Get-ScheduledTask -TaskName $ThermalGuardTaskName -ErrorAction SilentlyContinue
+        if (-not $task) { return }
+        if ($Enabled) { Enable-ScheduledTask  -TaskName $ThermalGuardTaskName -ErrorAction Stop | Out-Null }
+        else          { Disable-ScheduledTask -TaskName $ThermalGuardTaskName -ErrorAction Stop | Out-Null }
+    } catch {
+        Write-Log "Update install  [WARN] Could not $(if ($Enabled) {'enable'} else {'disable'}) scheduled task '$ThermalGuardTaskName': $_" "WARN"
+    }
+}
+
+function Stop-RunningGuardProcesses {
+    # Stops every OTHER ThermalGuard monitoring process (never this one).
+    try { Stop-ScheduledTask -TaskName $ThermalGuardTaskName -ErrorAction SilentlyContinue } catch { }
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match '(?i)-File\s+.*HWiNFO-ThermalGuard\.ps1' -and $_.ProcessId -ne $PID } |
+        ForEach-Object {
+            try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch { }
+        }
+    Start-Sleep -Seconds 2
+}
+
+function Start-GuardAfterSwap {
+    # Restarts the guard the way it was started: through the Scheduled Task if
+    # it exists, otherwise (shell:startup setups) through the VBS launcher.
+    # Throws if neither is available.
+    $paths = Get-ThermalGuardUpdatePaths
+    $task  = Get-ScheduledTask -TaskName $ThermalGuardTaskName -ErrorAction SilentlyContinue
+    if ($task) {
+        Start-ScheduledTask -TaskName $ThermalGuardTaskName -ErrorAction Stop
+        return
+    }
+    $vbs = Join-Path $paths.Dir "Start-HWiNFO-Remote.vbs"
+    if (-not (Test-Path $vbs)) {
+        throw "No scheduled task '$ThermalGuardTaskName' and no launcher at $vbs"
+    }
+    Start-Process -FilePath "wscript.exe" -ArgumentList "`"$vbs`""
+}
+
 function Invoke-StageUpdate {
+    # Returns $true when this release version has been dealt with for good
+    # (staged, or definitively rejected) and $false when the failure was
+    # transient (download) and a later check should simply try again.
     param($Release, [string]$RemoteTag, [version]$RemoteVersion)
 
-    $paths = Get-ThermalGuardUpdatePaths -Version $RemoteVersion.ToString()
+    $paths = Get-ThermalGuardUpdatePaths -Version $RemoteVersion.ToString() -BackupVersion $ScriptVersion
     Write-Log "Update install  Staging $RemoteTag ..."
+
+    # A version that already failed its health check once and was rolled back
+    # is not staged again (that would be a rollback loop on every restart).
+    $failedMarker = Join-Path $paths.Dir "$($paths.BaseName).failed-v$($RemoteVersion.ToString()).txt"
+    if (Test-Path $failedMarker) {
+        Write-Log "Update install  [WARN] Skipping ${RemoteTag}: it failed its health check on this machine before. Delete $failedMarker to try it again." "WARN"
+        return $true
+    }
 
     # Prefer an attached release asset with the exact same filename as the
     # live script; fall back to the raw file at that tag if the release has
@@ -1330,7 +1577,33 @@ function Invoke-StageUpdate {
         Write-Log "Update install  [ERROR] Download failed: $_" "ERROR"
         Send-Alert -Title "ThermalGuard update download failed" -Body "$RemoteTag could not be downloaded: $_" -Priority "high"
         Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
-        return
+        return $false
+    }
+
+    # --- integrity: SHA-256 against the hash published with the release ------
+    $actualHash   = (Get-FileHash -Path $tempFile -Algorithm SHA256).Hash.ToLowerInvariant()
+    $expectedHash = Get-ExpectedUpdateHash -Release $Release -FileName $liveFileName
+    $hashVerified = $false
+    if ($expectedHash) {
+        if ($actualHash -ne $expectedHash) {
+            Write-Log "Update install  [ERROR] SHA-256 mismatch for $RemoteTag (expected $expectedHash, got $actualHash). NOT staging it." "ERROR"
+            Send-Alert -Title "ThermalGuard update rejected" `
+                -Body "$RemoteTag does not match its published SHA-256 and was not installed. Still running $ScriptVersion." `
+                -Priority "urgent"
+            Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+            return $true
+        }
+        $hashVerified = $true
+        Write-Log "Update install  SHA-256 verified: $actualHash"
+    } elseif ($UpdateRequireHash) {
+        Write-Log "Update install  [ERROR] $RemoteTag has no usable SHA-256 asset and `$UpdateRequireHash is on. NOT staging it." "ERROR"
+        Send-Alert -Title "ThermalGuard update rejected" `
+            -Body "$RemoteTag has no SHA-256 published with the release, so it was not downloaded for install. Still running $ScriptVersion." `
+            -Priority "high"
+        Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+        return $true
+    } else {
+        Write-Log "Update install  [WARN] No SHA-256 published for $RemoteTag. Staging it as UNVERIFIED (never auto-installed). SHA-256 of the download: $actualHash" "WARN"
     }
 
     if (-not (Test-ScriptSyntaxValid -Path $tempFile)) {
@@ -1339,7 +1612,7 @@ function Invoke-StageUpdate {
             -Body "$RemoteTag failed syntax validation after download and was not installed. Still running $ScriptVersion." `
             -Priority "high"
         Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
-        return
+        return $true
     }
 
     try {
@@ -1347,20 +1620,27 @@ function Invoke-StageUpdate {
             Copy-Item -Path $paths.LivePath -Destination $paths.BackupPath -Force -ErrorAction Stop
             Write-Log "Update install  Backed up current v$ScriptVersion to $($paths.BackupPath)"
         }
+        # Only one staged update at a time: drop older pending files and their hash sidecars.
+        Get-ChildItem -Path (Join-Path $paths.Dir "$($paths.BaseName).pending-v*") -ErrorAction SilentlyContinue |
+            Remove-Item -Force -ErrorAction SilentlyContinue
         Move-Item -Path $tempFile -Destination $paths.PendingPath -Force -ErrorAction Stop
-        Write-Log "Update install  [OK] Staged $RemoteTag as $($paths.PendingPath)"
+        if ($hashVerified) {
+            # The installer re-checks the staged file against this right before the swap.
+            Set-Content -Path "$($paths.PendingPath).sha256" -Value $actualHash -Encoding ASCII -ErrorAction Stop
+        }
+        Write-Log "Update install  [OK] Staged $RemoteTag as $($paths.PendingPath)$(if (-not $hashVerified) {' (UNVERIFIED)'})"
     } catch {
         Write-Log "Update install  [ERROR] Could not stage files: $_" "ERROR"
         Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
-        return
+        return $false
     }
 
-    # Rotate old backups beyond the configured retention count.
+    # Rotate old backups beyond the configured retention count. 0 would mean
+    # "delete everything including the backup just made", so keep at least one.
     try {
-        $backupPattern = Join-Path $paths.Dir "$($paths.BaseName).backup-v*.ps1"
-        $oldBackups = Get-ChildItem -Path $backupPattern -ErrorAction SilentlyContinue |
-                      Sort-Object LastWriteTime -Descending |
-                      Select-Object -Skip $UpdateBackupsToKeep
+        $keepBackups = [Math]::Max(1, $UpdateBackupsToKeep)
+        $oldBackups  = Get-SortedVersionedFiles -Pattern (Join-Path $paths.Dir "$($paths.BaseName).backup-v*.ps1") |
+                       Select-Object -Skip $keepBackups
         foreach ($old in $oldBackups) {
             Remove-Item $old.FullName -Force -ErrorAction SilentlyContinue
             Write-Log "Update install  Rotated out old backup: $($old.Name)"
@@ -1369,10 +1649,10 @@ function Invoke-StageUpdate {
         Write-Log "Update install  [WARN] Backup rotation failed (non-fatal): $_" "WARN"
     }
 
-    if ($EnableAutoInstall) {
+    if ($EnableAutoInstall -and $hashVerified) {
         Write-Log "Update install  EnableAutoInstall is on, launching installer for $RemoteTag ..."
         Send-Alert -Title "ThermalGuard installing update" `
-            -Body "$RemoteTag downloaded and validated, installing now. Will roll back automatically if it fails to come up healthy." `
+            -Body "$RemoteTag downloaded, hash-verified and validated, installing now. Will roll back automatically if it fails to come up healthy." `
             -Priority "default"
         try {
             Start-Process -FilePath (Get-Process -Id $PID).Path `
@@ -1381,28 +1661,33 @@ function Invoke-StageUpdate {
         } catch {
             Write-Log "Update install  [ERROR] Could not launch installer process: $_" "ERROR"
         }
+    } elseif ($EnableAutoInstall) {
+        Write-Log "Update install  [WARN] EnableAutoInstall is on, but $RemoteTag is UNVERIFIED (no SHA-256). Not installing automatically." "WARN"
+        Send-Alert -Title "ThermalGuard update staged (unverified)" `
+            -Body "$RemoteTag has no published SHA-256, so it was NOT auto-installed. Check it, then run Approve-ThermalGuardUpdate.ps1." `
+            -Priority "default"
     } else {
         Send-Alert -Title "ThermalGuard update staged" `
-            -Body "$RemoteTag downloaded and validated. Run Approve-ThermalGuardUpdate.ps1 to install it." `
+            -Body "$RemoteTag downloaded$(if ($hashVerified) {', hash-verified'} else {' (UNVERIFIED)'}) and validated. Run Approve-ThermalGuardUpdate.ps1 to install it." `
             -Priority "default"
     }
+    return $true
 }
 
 function Install-ThermalGuardUpdate {
-    # Standalone install routine: stop -> swap -> restart -> health check ->
-    # rollback-if-unhealthy. Deliberately written to be safe to run as either
-    # a detached child process spawned by the currently-running (old, known
-    # good) ThermalGuard instance, OR as a manual approval step via
-    # Approve-ThermalGuardUpdate.ps1 - in both cases it is a SEPARATE process
-    # from whatever it is about to replace, which is what makes the health
-    # check and rollback meaningful (a process cannot reliably supervise
-    # replacing its own running code and then judge whether that worked).
+    # Standalone install routine: verify -> back up -> stop -> swap -> restart
+    # -> health check -> rollback-if-unhealthy. Written to run as a SEPARATE
+    # process from whatever it replaces, either as a detached child spawned by
+    # the currently-running (old, known good) guard, or by hand through
+    # Approve-ThermalGuardUpdate.ps1. That separation is what makes the health
+    # check and rollback meaningful: a process cannot reliably supervise
+    # replacing its own running code and then judge whether that worked.
     $paths = Get-ThermalGuardUpdatePaths
 
-    $pendingPattern = Join-Path $paths.Dir "$($paths.BaseName).pending-v*.ps1"
-    $pending = Get-ChildItem -Path $pendingPattern -ErrorAction SilentlyContinue | Select-Object -First 1
+    $pending = Get-SortedVersionedFiles -Pattern (Join-Path $paths.Dir "$($paths.BaseName).pending-v*.ps1") |
+               Select-Object -First 1
     if (-not $pending) {
-        Write-Log "Update install  [INFO] No staged update found (looked for $pendingPattern). Nothing to do."
+        Write-Log "Update install  [INFO] No staged update found in $($paths.Dir). Nothing to do."
         return
     }
 
@@ -1412,57 +1697,100 @@ function Install-ThermalGuardUpdate {
         Write-Log "Update install  [ERROR] Could not parse version out of staged filename: $($pending.Name)" "ERROR"
         return
     }
-    $backupPath = Join-Path $paths.Dir "$($paths.BaseName).backup-v$newVersion.ps1"
-    $oldBackupForRollback = Join-Path $paths.Dir "$($paths.BaseName).backup-v$ScriptVersion.ps1"
-    # The backup made during staging carries the version that was live AT
-    # STAGING TIME, which is $ScriptVersion of the process that staged it -
-    # not necessarily this installer process's own $ScriptVersion (this
-    # installer process is running off the OLD file when invoked via
-    # -InstallPendingUpdate, since it has not swapped anything in yet).
-    $rollbackSource = if (Test-Path $oldBackupForRollback) { $oldBackupForRollback } else { $backupPath }
 
-    Write-Log "Update install  Installing staged update: $($pending.Name) -> $($paths.LivePath)"
-
-    $taskName = $ThermalGuardTaskName
     try {
-        Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-    } catch { }
-    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -match '(?i)-File\s+.*HWiNFO-ThermalGuard\.ps1' -and $_.ProcessId -ne $PID } |
-        ForEach-Object {
-            try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch { }
+        if ([version]$newVersion -le [version]$ScriptVersion) {
+            Write-Log "Update install  [WARN] Staged v$newVersion is not newer than the running v$ScriptVersion. Not installing." "WARN"
+            return
         }
-    Start-Sleep -Seconds 2
+    } catch {
+        Write-Log "Update install  [ERROR] Could not compare versions (staged '$newVersion', running '$ScriptVersion'): $_" "ERROR"
+        return
+    }
+
+    # --- integrity: staged file must still match the hash it was staged with --
+    $sidecar = "$($pending.FullName).sha256"
+    if (Test-Path $sidecar) {
+        $expected = ([string](Get-Content -Path $sidecar -TotalCount 1 -ErrorAction SilentlyContinue)).Trim().ToLowerInvariant()
+        $actual   = (Get-FileHash -Path $pending.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actual -ne $expected) {
+            Write-Log "Update install  [ERROR] Staged file $($pending.Name) no longer matches its recorded SHA-256 (expected $expected, got $actual). NOT installing." "ERROR"
+            Send-Alert -Title "ThermalGuard update refused" -Body "Staged v$newVersion was modified after download. Not installed." -Priority "urgent"
+            return
+        }
+        Write-Log "Update install  Staged file SHA-256 re-verified."
+    } elseif ($UpdateRequireHash) {
+        Write-Log "Update install  [ERROR] $($pending.Name) has no .sha256 sidecar and `$UpdateRequireHash is on. NOT installing." "ERROR"
+        Write-Log "  -> Create '$($pending.Name).sha256' with the file's SHA-256 yourself, or set `$UpdateRequireHash = `$false." "ERROR"
+        Send-Alert -Title "ThermalGuard update refused" -Body "Staged v$newVersion has no recorded SHA-256. Not installed." -Priority "high"
+        return
+    } else {
+        Write-Log "Update install  [WARN] Installing UNVERIFIED staged file $($pending.Name) (no .sha256 sidecar, `$UpdateRequireHash is off)." "WARN"
+    }
+
+    if (-not (Test-ScriptSyntaxValid -Path $pending.FullName)) {
+        Write-Log "Update install  [ERROR] Staged v$newVersion failed syntax validation just before install. NOT installing." "ERROR"
+        Send-Alert -Title "ThermalGuard update refused" -Body "Staged v$newVersion failed syntax validation. Not installed." -Priority "high"
+        return
+    }
+
+    # Fresh backup of the file that is live RIGHT NOW, named after the version
+    # it contains. This process runs from that very file, so $ScriptVersion is
+    # its version. Rollback always restores exactly this copy.
+    $rollbackSource = Join-Path $paths.Dir "$($paths.BaseName).backup-v$ScriptVersion.ps1"
+    try {
+        Copy-Item -Path $paths.LivePath -Destination $rollbackSource -Force -ErrorAction Stop
+    } catch {
+        Write-Log "Update install  [ERROR] Could not back up the live script to $rollbackSource : $_ . NOT installing." "ERROR"
+        Send-Alert -Title "ThermalGuard update failed" -Body "Could not create the rollback backup. Nothing was changed." -Priority "urgent"
+        return
+    }
+
+    Write-Log "Update install  Installing staged update: $($pending.Name) -> $($paths.LivePath) (rollback copy: $rollbackSource)"
+
+    Set-GuardTaskEnabled -Enabled $false
+    Stop-RunningGuardProcesses
 
     try {
         Copy-Item -Path $pending.FullName -Destination $paths.LivePath -Force -ErrorAction Stop
         Remove-Item -Path $pending.FullName -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path $sidecar -Force -ErrorAction SilentlyContinue
     } catch {
         Write-Log "Update install  [ERROR] Could not copy staged file into place: $_" "ERROR"
         Send-Alert -Title "ThermalGuard update failed" -Body "Could not install v$newVersion : $_" -Priority "urgent"
-        try { Start-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue } catch { }
+        Set-GuardTaskEnabled -Enabled $true
+        try { Start-GuardAfterSwap } catch { Write-Log "Update install  [ERROR] Could not restart the guard: $_" "ERROR" }
         return
     }
 
     $restartTime = Get-Date
+    Set-GuardTaskEnabled -Enabled $true
     try {
-        Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
+        Start-GuardAfterSwap
     } catch {
-        Write-Log "Update install  [ERROR] Could not start scheduled task after swap: $_" "ERROR"
+        Write-Log "Update install  [ERROR] Could not start the guard after swap: $_" "ERROR"
     }
 
+    # Healthy = the new process logged the explicit health marker, which the
+    # main loop writes on its first poll that resolved a valid temperature.
+    # "Software Check complete" is NOT enough: that line is logged on failure too.
     Write-Log "Update install  Waiting up to ${UpdateHealthCheckTimeoutSec}s for v$newVersion to come up healthy..."
-    $healthy = $false
-    $deadline = $restartTime.AddSeconds($UpdateHealthCheckTimeoutSec)
+    $healthy      = $false
+    $deadline     = $restartTime.AddSeconds($UpdateHealthCheckTimeoutSec)
+    $markerRegex  = [regex]::Escape($HealthMarkerText)
+    # Log timestamps are truncated to whole seconds, so compare against the
+    # restart time truncated the same way. A marker line from before the swap
+    # cannot land in the same second: the old process is killed at least 2s earlier.
+    $notBefore    = [datetime]::ParseExact($restartTime.ToString('yyyy-MM-dd HH:mm:ss'), 'yyyy-MM-dd HH:mm:ss', $null)
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Seconds 3
         if (-not (Test-Path $LogFile)) { continue }
-        $tail = Get-Content $LogFile -Tail 60 -ErrorAction SilentlyContinue
-        $successLine = $tail | Where-Object { $_ -match '=== Software Check complete ===' } | Select-Object -Last 1
-        if ($successLine -and $successLine -match '^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]') {
+        $tail = Get-Content $LogFile -Tail 300 -ErrorAction SilentlyContinue
+        $markerLine = $tail | Where-Object { $_ -match $markerRegex } | Select-Object -Last 1
+        if ($markerLine -and $markerLine -match '^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]') {
             try {
                 $lineTime = [datetime]::ParseExact($matches[1], 'yyyy-MM-dd HH:mm:ss', $null)
-                if ($lineTime -ge $restartTime) { $healthy = $true; break }
+                if ($lineTime -ge $notBefore) { $healthy = $true; break }
             } catch { }
         }
     }
@@ -1477,15 +1805,16 @@ function Install-ThermalGuardUpdate {
     Send-Alert -Title "ThermalGuard update failed, rolling back" `
         -Body "v$newVersion did not start correctly. Restoring the previous working version." -Priority "urgent"
 
+    # Remember the failure so the (old, restored) guard does not stage and
+    # install the very same version again on its next start.
     try {
-        Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        Set-Content -Path (Join-Path $paths.Dir "$($paths.BaseName).failed-v$newVersion.txt") `
+            -Value "v$newVersion failed its health check on $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') and was rolled back. Delete this file to allow another attempt." `
+            -Encoding ASCII -ErrorAction Stop
     } catch { }
-    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -match '(?i)-File\s+.*HWiNFO-ThermalGuard\.ps1' -and $_.ProcessId -ne $PID } |
-        ForEach-Object {
-            try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch { }
-        }
-    Start-Sleep -Seconds 2
+
+    Set-GuardTaskEnabled -Enabled $false
+    Stop-RunningGuardProcesses
 
     if (Test-Path $rollbackSource) {
         try {
@@ -1502,13 +1831,13 @@ function Install-ThermalGuardUpdate {
             -Body "No backup found. Manual intervention needed at $($paths.LivePath)." -Priority "urgent"
     }
 
+    Set-GuardTaskEnabled -Enabled $true
     try {
-        Start-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        Start-GuardAfterSwap
     } catch {
-        Write-Log "Update install  [ERROR] Could not restart scheduled task after rollback: $_" "ERROR"
+        Write-Log "Update install  [ERROR] Could not restart the guard after rollback: $_" "ERROR"
     }
 }
-
 
 # === SENSOR READING ===========================================================
 
@@ -1524,7 +1853,7 @@ function Get-HWiNFOSensors {
 $script:LoggedFallbackUsed = @{}
 
 function Find-SensorValueSingle {
-    param($SensorData, [string]$Match, $PreferredSensorIndex = $null, [string]$PreferredUnit = $null)
+    param($SensorData, [string]$Match, $PreferredSensorIndex = $null, [string]$PreferredUnit = $null, [string]$RequiredUnitPattern = $null)
 
     # SAFETY GUARD: no real HWiNFO sensor label is 1-2 characters long. If
     # $Match ever ends up that short (observed in production as a single
@@ -1550,6 +1879,25 @@ function Find-SensorValueSingle {
         if ($lo -eq $Match -or $lu -eq $Match)            { $exactMatches   += $reading; continue }
         if ($lo -like "*$Match*" -or $lu -like "*$Match*") { $partialMatches += $reading }
     }
+
+    # HARD unit filter (used for the dedicated temperature sensors): a reading
+    # whose unit is not a temperature is never used as one, no matter how well
+    # its label matches. Without this, a partial label match such as
+    # "CPU Package" can land on "CPU Package Power" (W) and hand a wattage to a
+    # degrees-C comparison. If the filter removes every candidate, the sensor
+    # counts as missing (loud, logged once) instead of silently using a wrong one.
+    if ($RequiredUnitPattern) {
+        $beforeCount    = $exactMatches.Count + $partialMatches.Count
+        $exactMatches   = @($exactMatches   | Where-Object { [string]$_.unit -match $RequiredUnitPattern })
+        $partialMatches = @($partialMatches | Where-Object { [string]$_.unit -match $RequiredUnitPattern })
+        if ($beforeCount -gt 0 -and ($exactMatches.Count + $partialMatches.Count) -eq 0) {
+            if (-not $script:LoggedSensorMatchWarnings["UNIT:$Match"]) {
+                Write-Log "SensorMatch '$Match' only matched readings whose unit is not a temperature - refusing to use them as a temperature" "ERROR"
+                $script:LoggedSensorMatchWarnings["UNIT:$Match"] = $true
+            }
+        }
+    }
+
     $m = if ($exactMatches.Count -gt 0) { $exactMatches } else { $partialMatches }
 
     if ($m.Count -gt 1 -and $PreferredSensorIndex) {
@@ -1609,7 +1957,7 @@ function Find-SensorValueSingle {
 }
 
 function Find-SensorValue {
-    param($SensorData, $Match, $PreferredSensorIndex = $null, [string]$PreferredUnit = $null, [string]$SensorDisplayName = $null)
+    param($SensorData, $Match, $PreferredSensorIndex = $null, [string]$PreferredUnit = $null, [string]$SensorDisplayName = $null, [string]$RequiredUnitPattern = $null)
 
     # Explicit type check (not an "is it NOT an array" inference): a genuine
     # [string] goes straight to Find-SensorValueSingle with zero
@@ -1617,13 +1965,13 @@ function Find-SensorValue {
     # entry's fallback chain) go through the candidate loop below. See the
     # self-test block above for why this was split out this way.
     if ($Match -is [string]) {
-        return Find-SensorValueSingle -SensorData $SensorData -Match $Match -PreferredSensorIndex $PreferredSensorIndex -PreferredUnit $PreferredUnit
+        return Find-SensorValueSingle -SensorData $SensorData -Match $Match -PreferredSensorIndex $PreferredSensorIndex -PreferredUnit $PreferredUnit -RequiredUnitPattern $RequiredUnitPattern
     }
 
     $candidates = $Match
 
     for ($i = 0; $i -lt $candidates.Count; $i++) {
-        $value = Find-SensorValueSingle -SensorData $SensorData -Match $candidates[$i] -PreferredSensorIndex $PreferredSensorIndex -PreferredUnit $PreferredUnit
+        $value = Find-SensorValueSingle -SensorData $SensorData -Match $candidates[$i] -PreferredSensorIndex $PreferredSensorIndex -PreferredUnit $PreferredUnit -RequiredUnitPattern $RequiredUnitPattern
         if ($null -ne $value) {
             if ($i -gt 0) {
                 $logKey = "$SensorDisplayName|$($candidates[$i])"
@@ -1647,21 +1995,81 @@ function Find-GPULoad {
 # === STAGE 2 / STAGE 3 ========================================================
 
 function Invoke-KillProcesses {
-    Write-Log "=== STAGE 2: killing processes ===" "CRIT"
+    Write-Log "=== STAGE 2: killing processes ===$(if ($DryRun) {' [DRYRUN]'})" "CRIT"
     foreach ($proc in $KillProcesses) {
         $running = Get-Process -Name $proc -ErrorAction SilentlyContinue
         if ($running) {
-            Write-Log "Killing: $proc (PID: $($running.Id -join ', '))"
-            Stop-Process -Name $proc -Force -ErrorAction SilentlyContinue
+            if ($DryRun) {
+                Write-Log "[DRYRUN] would kill: $proc (PID: $($running.Id -join ', '))" "CRIT"
+            } else {
+                Write-Log "Killing: $proc (PID: $($running.Id -join ', '))"
+                Stop-Process -Name $proc -Force -ErrorAction SilentlyContinue
+            }
         }
     }
 }
 
 function Invoke-Shutdown {
+    if ($DryRun) {
+        Write-Log "=== STAGE 3: EMERGENCY SHUTDOWN [DRYRUN] ===" "CRIT"
+        Write-Log "[DRYRUN] would run: shutdown.exe /s /f /t 0 - NOT executed. Simulation ends here, the script exits." "CRIT"
+        Send-Alert -Title "EMERGENCY SHUTDOWN" -Body "Dry run: the system would be shutting down now. Nothing was shut down." -Priority "urgent"
+        return
+    }
     Write-Log "=== STAGE 3: EMERGENCY SHUTDOWN ===" "CRIT"
     Send-Alert -Title "EMERGENCY SHUTDOWN" -Body "System is shutting down now." -Priority "urgent"
     Start-Sleep -Seconds 2
     & shutdown.exe /s /f /t 0
+}
+
+# === DATA-LOSS FAIL-SAFE =====================================================
+# Blind = no valid reading from the primary CPU/GPU temperature sensors. Until
+# this existed, "endpoint down" or "sensor missing" only produced alerts while
+# the Stage 2/3 timers (which need a reading to run) froze. Now being blind for
+# long enough is treated like an overheat: Stage 2 first, then shutdown.
+# Returns $true when it has just triggered the shutdown (caller must stop).
+
+$script:BlindSince      = $null
+$script:BlindStage2Done = $false
+
+function Invoke-DataLossFailsafe {
+    param([bool]$IsBlind)
+
+    if (-not $EnableDataLossFailsafe) { return $false }
+
+    if (-not $IsBlind) {
+        if ($null -ne $script:BlindSince) {
+            $secs = [int]((Get-Date) - $script:BlindSince).TotalSeconds
+            Write-Log "Data-loss fail-safe: valid temperature data is back after ${secs}s, counter reset"
+        }
+        $script:BlindSince      = $null
+        $script:BlindStage2Done = $false
+        return $false
+    }
+
+    if ($null -eq $script:BlindSince) {
+        $script:BlindSince = Get-Date
+        Write-Log "Data-loss fail-safe: no valid CPU/GPU temperature, counting (Stage 2 after ${DataLossStage2Sec}s, shutdown after ${DataLossShutdownSec}s blind)" "WARN"
+        return $false
+    }
+
+    $blindSec = [int]((Get-Date) - $script:BlindSince).TotalSeconds
+
+    if ($blindSec -ge $DataLossStage2Sec -and -not $script:BlindStage2Done) {
+        $script:BlindStage2Done = $true
+        Write-Log "Data-loss fail-safe: blind for ${blindSec}s, STAGE 2" "CRIT"
+        Send-Alert -Title "Fail-safe Stage 2: no temperature data" `
+            -Body "Blind for ${blindSec}s. Killing processes now, shutdown after ${DataLossShutdownSec}s blind if data does not come back." `
+            -Priority "urgent"
+        Invoke-KillProcesses
+    }
+
+    if ($blindSec -ge $DataLossShutdownSec) {
+        Write-Log "Data-loss fail-safe: blind for ${blindSec}s, SHUTDOWN" "CRIT"
+        Invoke-Shutdown
+        return $true
+    }
+    return $false
 }
 
 # === WATCHDOG =================================================================
@@ -1742,7 +2150,15 @@ function Invoke-Watchdog {
 
     if ($EnableHWiNFO12hReset -and $script:HWiNFOStartTime) {
         $runtimeMin = ($now - $script:HWiNFOStartTime).TotalMinutes
-        if ($runtimeMin -ge $HWiNFOMaxRuntimeMin) {
+        if ($runtimeMin -ge $HWiNFOMaxRuntimeMin -and $script:AnyStageCriticalActive -and -not $script:Reset12hDeferredLogged) {
+            # The reset blocks this loop for ~30s. Never do that while a
+            # Stage 2/3 timer is running; try again at the next watchdog cycle
+            # (the real session limit is 720 min, the default trigger 690).
+            Write-Log "WATCHDOG: 12h reset deferred, a critical timer or data-loss counter is active" "WARN"
+            $script:Reset12hDeferredLogged = $true
+        }
+        if ($runtimeMin -ge $HWiNFOMaxRuntimeMin -and -not $script:AnyStageCriticalActive) {
+            $script:Reset12hDeferredLogged = $false
             Write-Log "WATCHDOG: HWiNFO64 running for $([int]$runtimeMin) min, performing 12h reset..." "WARN"
             Send-Alert -Title "HWiNFO 12h reset" -Body "Automatic restart (free version session limit)" -Priority "default"
 
@@ -1825,10 +2241,11 @@ function Invoke-Watchdog {
                 $fiphaDir = Split-Path $script:ResolvedFipha -Parent
                 try {
                     $proc = Start-Process $script:ResolvedFipha -WorkingDirectory $fiphaDir -PassThru -ErrorAction Stop
-                    Start-Sleep -Seconds 5
-                    $fpProc = Get-Process fipha -ErrorAction SilentlyContinue
-                    if ($fpProc) {
-                        Write-Log "WATCHDOG: fipha restarted (PID $($fpProc.Id))"
+                    # Short check only: this runs inside the polling loop and must not block it for long.
+                    Start-Sleep -Milliseconds 1500
+                    $proc.Refresh()
+                    if (-not $proc.HasExited) {
+                        Write-Log "WATCHDOG: fipha restarted (PID $($proc.Id))"
                     } else {
                         Write-Log "WATCHDOG: fipha exited immediately again (check its own config/log)" "WARN"
                     }
@@ -1859,6 +2276,13 @@ function Start-ThermalGuard {
     Write-Log "Stage 2 after ${Stage2Delay}s / Stage 3 after ${Stage3Delay}s"
     Write-Log "Watchdog:        $(if ($EnableWatchdog) {'ON'} else {'OFF'})"
     Write-Log "12h Reset:       $(if ($EnableHWiNFO12hReset) {"ON (after $HWiNFOMaxRuntimeMin min)"} else {'OFF'})"
+    Write-Log "Data-loss fail-safe: $(if ($EnableDataLossFailsafe) {"ON (Stage 2 after ${DataLossStage2Sec}s, shutdown after ${DataLossShutdownSec}s without valid CPU/GPU temperature)"} else {'OFF'})"
+    if ($DryRun) {
+        Write-Log "*** DRY RUN: Stage 2/3 are only logged, nothing is killed or shut down. Watchdog and update check are off. ***" "WARN"
+    }
+    if (-not [double]::IsNaN($SimulateTemp)) {
+        Write-Log "*** SIMULATED CPU temperature: $SimulateTemp C (overrides the real 'CPU Tctl/Tdie' reading) ***" "WARN"
+    }
 
     try {
         $null = New-ItemProperty -Path "HKCU:\SOFTWARE\HWiNFO64\Settings" -Name "SensorsSM" `
@@ -1898,6 +2322,14 @@ function Start-ThermalGuard {
     $lastWatchdogRun        = $null
     $unhealthyCycleCount    = 0
     $selfTestPrinted        = $false
+    $healthMarkerLogged     = $false
+    $fanSeenSpinning        = @{}
+
+    # Primary temperature sensors: if none of these has a valid reading the
+    # guard is blind (see Invoke-DataLossFailsafe).
+    $primaryTemps = @()
+    if ($EnableCPU) { $primaryTemps += "CPU Tctl/Tdie" }
+    if ($EnableGPU) { $primaryTemps += "GPU Temperature" }
 
     while ($true) {
         if ($EnableWatchdog) {
@@ -1916,6 +2348,9 @@ function Start-ThermalGuard {
                 $lastEndpointAlert = Get-Date
                 $lastWatchdogRun = $null
             }
+            # Blind: keep updates away and let the data-loss fail-safe count.
+            $script:AnyStageCriticalActive = $true
+            if ((Invoke-DataLossFailsafe -IsBlind ($primaryTemps.Count -gt 0)) -contains $true) { return }
             Start-Sleep -Seconds $PollInterval
             continue
         }
@@ -1968,7 +2403,7 @@ function Start-ThermalGuard {
                     if ($reading) {
                         Write-Log "  $($sensor.Name) -> labelOriginal='$($reading.labelOriginal)' sensorIndex=$($reading.sensorIndex) readingId=$($reading.readingId) unit=$($reading.unit) value=$($reading.value)"
                     } else {
-                        Write-Log "  $($sensor.Name) -> NO MATCH for '$singleMatch'" "WARN"
+                        Write-Log "  $($sensor.Name) -> NO MATCH for '$singleMatch'$(if ($sensor.Optional) {' (optional sensor)'})" $(if ($sensor.Optional) { "INFO" } else { "WARN" })
                     }
                     continue
                 }
@@ -2000,7 +2435,19 @@ function Start-ThermalGuard {
                     Write-Log "  $($sensor.Name) -> labelOriginal='$($reading.labelOriginal)' sensorIndex=$($reading.sensorIndex) readingId=$($reading.readingId) unit=$($reading.unit) value=$($reading.value)$fallbackNote"
                 } else {
                     $matchDisplay = $matchCandidates -join "' / '"
-                    Write-Log "  $($sensor.Name) -> NO MATCH for '$matchDisplay'" "WARN"
+                    Write-Log "  $($sensor.Name) -> NO MATCH for '$matchDisplay'$(if ($sensor.Optional) {' (optional sensor)'})" $(if ($sensor.Optional) { "INFO" } else { "WARN" })
+                }
+            }
+            # The lines above only show which readings match by label. This shows
+            # whether the REAL lookup (incl. index/unit filters) resolves them.
+            foreach ($sensor in $Sensors) {
+                if ($sensor.Group -eq "CPU" -and -not $EnableCPU) { continue }
+                if ($sensor.Group -eq "GPU" -and -not $EnableGPU) { continue }
+                $stUnitHint    = if ($sensor.Type -eq "fan")  { "RPM" } else { $null }
+                $stUnitPattern = if ($sensor.Type -eq "temp") { $DedicatedTempUnitPattern } else { $null }
+                $stValue = Find-SensorValue -SensorData $sensorData -Match $sensor.SensorMatch -PreferredSensorIndex $sensor.PreferredSensorIndex -PreferredUnit $stUnitHint -SensorDisplayName $sensor.Name -RequiredUnitPattern $stUnitPattern
+                if ($null -eq $stValue) {
+                    Write-Log "  $($sensor.Name) -> NOT resolved by the live lookup$(if ($sensor.Optional) {' (optional sensor)'})" $(if ($sensor.Optional) { "INFO" } else { "WARN" })
                 }
             }
             Write-Log "=== End self-test ==="
@@ -2009,15 +2456,23 @@ function Start-ThermalGuard {
 
         $gpuLoad = if ($EnableGPU) { Find-GPULoad -SensorData $sensorData } else { $null }
 
+        $tempOk = @{}
+
         foreach ($sensor in $Sensors) {
             if ($sensor.Group -eq "CPU" -and -not $EnableCPU) { continue }
             if ($sensor.Group -eq "GPU" -and -not $EnableGPU) { continue }
 
             $sName = $sensor.Name
-            $unitHint = if ($sensor.Type -eq "fan") { "RPM" } else { $null }
-            $value = Find-SensorValue -SensorData $sensorData -Match $sensor.SensorMatch -PreferredSensorIndex $sensor.PreferredSensorIndex -PreferredUnit $unitHint -SensorDisplayName $sName
+            $unitHint    = if ($sensor.Type -eq "fan")  { "RPM" } else { $null }
+            $unitPattern = if ($sensor.Type -eq "temp") { $DedicatedTempUnitPattern } else { $null }
+            $value = Find-SensorValue -SensorData $sensorData -Match $sensor.SensorMatch -PreferredSensorIndex $sensor.PreferredSensorIndex -PreferredUnit $unitHint -SensorDisplayName $sName -RequiredUnitPattern $unitPattern
+
+            # -SimulateTemp: pretend the CPU temperature (implies -DryRun).
+            if (-not [double]::IsNaN($SimulateTemp) -and $sName -eq "CPU Tctl/Tdie") { $value = $SimulateTemp }
 
             if ($null -eq $value) {
+                # Optional sensors (e.g. GPU Fan 2) may legitimately not exist.
+                if ($sensor.Optional) { continue }
                 $missingSensorCounts[$sName] = [int]$missingSensorCounts[$sName] + 1
                 if ($missingSensorCounts[$sName] -ge $MissingSensorAlertAfterPolls) {
                     $lastMissingAlert = $missingSensorLastAlert[$sName]
@@ -2057,6 +2512,14 @@ function Start-ThermalGuard {
                 continue
             }
             $script:LoggedImplausibleTemp.Remove($sName)
+            if ($sensor.Type -eq "temp") { $tempOk[$sName] = $true }
+
+            # Armed-after-spinning for optional fans: a 0 RPM reading that has
+            # never been above 0 in this run is a phantom sensor, not a dead fan.
+            if ($sensor.Optional -and $sensor.Type -eq "fan") {
+                if ($value -gt 0) { $fanSeenSpinning[$sName] = $true }
+                if (-not $fanSeenSpinning[$sName]) { continue }
+            }
 
             if ($sensor.Type -eq "temp") {
                 if ($value -ge $sensor.WarnThreshold -and -not $warnSent[$sName]) {
@@ -2131,7 +2594,21 @@ function Start-ThermalGuard {
         # never stage or install an update while a sensor is actively mid-way
         # through the Stage 2/3 timer. Overheat handling always outranks
         # updating the script that is doing the handling.
-        $script:AnyStageCriticalActive = ($triggerTimestamps.Count -gt 0)
+        # Data-loss fail-safe: blind = a primary CPU/GPU temperature has no valid reading.
+        $isBlind = (@($primaryTemps | Where-Object { -not $tempOk[$_] }).Count -gt 0)
+
+        # Health marker for the update installer: the first poll in which ALL
+        # primary temperature sensors (CPU and GPU, as far as enabled) have a
+        # valid reading, i.e. the guard is not blind. One resolved sensor is not
+        # enough: a version that breaks only the CPU lookup must not count as healthy.
+        if (-not $healthMarkerLogged -and -not $isBlind) {
+            Write-Log "=== $HealthMarkerText ($($tempOk.Count) temperature sensor(s) resolved) ==="
+            $healthMarkerLogged = $true
+        }
+
+        if ((Invoke-DataLossFailsafe -IsBlind $isBlind) -contains $true) { return }
+
+        $script:AnyStageCriticalActive = (($triggerTimestamps.Count -gt 0) -or ($null -ne $script:BlindSince))
 
         Start-Sleep -Seconds $PollInterval
     }

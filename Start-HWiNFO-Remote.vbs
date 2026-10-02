@@ -1,5 +1,8 @@
 ' ============================================================================
-' Start-HWiNFO-Remote.vbs  (v1.42)
+' Start-HWiNFO-Remote.vbs  (v1.51)
+'
+' Also started every few minutes by the Scheduled Task's repetition trigger
+' (self-heal). The .bat exits silently when the guard is already running.
 '
 ' This launches Start-HWiNFO-Remote.bat completely invisibly (no CMD window),
 ' WITHOUT requesting UAC elevation here. Report finding #16: a UAC prompt

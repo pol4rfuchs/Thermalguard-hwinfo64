@@ -1,4 +1,4 @@
-# HWiNFO Thermal Guard v1.50
+# HWiNFO Thermal Guard v1.51
 
 **[Deutsch](README.md)** | [English](README.en.md)
 
@@ -47,6 +47,9 @@ Automatischer thermischer Schutz für Windows-Gaming-PCs.
    - `HWiNFO-ThermalGuard.ps1`
    - `Start-HWiNFO-Remote.bat`
    - `Start-HWiNFO-Remote.vbs`
+   - `Install-ScheduledTask.ps1` (richtet den Autostart ein)
+   - `Approve-ThermalGuardUpdate.ps1` (nur nötig, wenn du den Update-Download nutzt)
+   - `Get-SensorDump.ps1` (optional, nur zum [Sensordaten beisteuern](#sensordaten-beisteuern))
 3. `HWiNFO-ThermalGuard.ps1` öffnen → die ersten Zeilen anpassen:
 
    ```powershell
@@ -54,8 +57,9 @@ Automatischer thermischer Schutz für Windows-Gaming-PCs.
    $EnableNtfy = $false      # kein ntfy-Server? → false
    ```
 
-4. `Start-HWiNFO-Remote.bat` per Rechtsklick → **Als Administrator ausführen**
-5. Fertig — alles was fehlt wird automatisch installiert
+4. Autostart einrichten: `Install-ScheduledTask.ps1` in einer **Administrator-PowerShell** ausführen (siehe [Autostart](#autostart-einrichten)).
+   Zum schnellen Testen reicht auch: `Start-HWiNFO-Remote.bat` per Rechtsklick → **Als Administrator ausführen**
+5. Fertig — alles was fehlt (HWiNFO64, RemoteHWInfo, BurntToast) wird automatisch installiert
 
 ---
 
@@ -77,10 +81,22 @@ Falls winget bei HWiNFO fehlschlägt (z.B. Windows Update Service deaktiviert), 
 
 ```text
 C:\Tools\HWiNFO-ThermalGuard\
-├── HWiNFO-ThermalGuard.ps1      ← Hauptscript
-├── Start-HWiNFO-Remote.bat      ← Autostart-Kette
-├── Start-HWiNFO-Remote.vbs      ← Unsichtbar-Wrapper
-└── README.md                    ← Diese Dokumentation
+├── HWiNFO-ThermalGuard.ps1          ← Hauptscript
+├── Start-HWiNFO-Remote.bat          ← Launcher (Schnellcheck, PowerShell-Erkennung)
+├── Start-HWiNFO-Remote.vbs          ← Unsichtbar-Wrapper
+├── Install-ScheduledTask.ps1        ← richtet den Autostart-Task ein (einmalig, als Admin)
+├── Approve-ThermalGuardUpdate.ps1   ← installiert ein bereitgestelltes Update (Update-Download)
+├── Get-SensorDump.ps1               ← optional: Sensordaten für ein GitHub-Issue sammeln
+└── README.md                        ← Diese Dokumentation
+```
+
+Beim Update-Download kommen automatisch dazu (neben dem Hauptscript):
+
+```text
+HWiNFO-ThermalGuard.pending-vX.Y.ps1          ← bereitgestelltes, noch nicht aktives Update
+HWiNFO-ThermalGuard.pending-vX.Y.ps1.sha256   ← der beim Download geprüfte Hash
+HWiNFO-ThermalGuard.backup-vX.Y.ps1           ← Sicherung der Version X.Y (der Datei, die sie enthält)
+HWiNFO-ThermalGuard.failed-vX.Y.txt           ← Version X.Y hat den Health-Check nicht bestanden (Rollback)
 ```
 
 ---
@@ -114,10 +130,13 @@ Die Profile setzen automatisch die richtigen Sensor-Labels:
 ### Toggles
 
 ```powershell
-$EnableCPU  = $true     # CPU-Temperatur überwachen
-$EnableGPU  = $true     # GPU-Temperatur überwachen
-$EnableNtfy = $true     # Push-Benachrichtigungen via ntfy
+$EnableCPU   = $true     # CPU-Temperatur überwachen
+$EnableGPU   = $true     # GPU-Temperatur überwachen
+$EnableNtfy  = $true     # Push-Benachrichtigungen via ntfy
+$EnableFipha = $false    # fipha mitstarten und überwachen (optional, siehe unten)
 ```
+
+**fipha** ([mhwlng/fipha](https://github.com/mhwlng/fipha)) veröffentlicht HWiNFO-Sensoren per MQTT-Discovery in Home Assistant. Das ist ein Extra und gehört nicht zum Hitzeschutz: ThermalGuard startet und überwacht den Prozess nur mit, wenn du `$EnableFipha = $true` setzt. fipha braucht seine eigene `mqtt.config` neben der `fipha.exe`. Der Pfad wird wie bei den anderen Programmen gesucht (`$Fipha_Path`, sonst `C:\Tools\fipha\` und `C:\Tools\`). Fehlt fipha oder stürzt es ab, ist das nie ein Grund für Stufe 2/3.
 
 ### ntfy einrichten
 
@@ -139,6 +158,17 @@ $NTFY_TOPIC = "thermalguard-deinname"    # beliebiger Name, muss nur einzigartig
 
 Dann die ntfy-App installieren (Android/iOS), Topic subscriben, fertig.
 
+**Server mit Zugriffsschutz (Auth):**
+
+```powershell
+$NTFY_Token    = "tk_..."     # Access-Token, wird als "Authorization: Bearer" gesendet (bevorzugt)
+# oder statt Token:
+$NTFY_User     = "name"       # HTTP Basic
+$NTFY_Password = "passwort"
+```
+
+Token hat Vorrang, wenn beides gesetzt ist. Beides leer = offenes Topic. Die Zugangsdaten stehen im Klartext im Script, also lieber ein Token, das nur auf dieses Topic schreiben darf, als dein Haupt-Passwort.
+
 **Kein ntfy gewünscht:**
 
 ```powershell
@@ -147,20 +177,77 @@ $EnableNtfy = $false
 
 Windows Toast-Benachrichtigungen laufen immer, unabhängig von ntfy.
 
-### Update-Check (optional)
+### Update-Check und Update-Installation (optional)
 
-Prüft periodisch das GitHub-Repo auf eine neuere Version und meldet sich per Toast + ntfy, wenn eine da ist. Standardmäßig **aus**.
+Standardmäßig **alles aus**. Drei Stufen, jede einzeln zuschaltbar:
 
 ```powershell
-$EnableUpdateCheck        = $true
+$EnableUpdateCheck        = $true     # 1) melden: Toast + ntfy, wenn ein neueres Release existiert
 $UpdateCheckRepo          = "pol4rfuchs/ThermalGuard-hwinfo64"   # "owner/repo"
 $UpdateCheckIntervalHours = 24
+
+$EnableAutoDownload       = $true     # 2) laden, prüfen, bereitstellen - aber NICHT aktivieren
+$EnableAutoInstall        = $false    # 3) bereitgestelltes Update automatisch einspielen (nicht empfohlen)
+
+$UpdateRequireHash        = $true     # SHA-256 aus dem Release ist Pflicht (Standard)
+$UpdateBackupsToKeep      = 3         # Sicherungen der alten Versionen (mindestens 1 bleibt)
+$UpdateHealthCheckTimeoutSec = 90     # so lange wartet der Installer auf die neue Version
 ```
+
+**1) Check** (`$EnableUpdateCheck`)
 
 - Läuft einmal beim Start und danach alle `$UpdateCheckIntervalHours` Stunden weiter (geprüft aus dem Watchdog-Takt heraus, damit auch lange Sessions über den 12h-Reset hinweg mitbekommen, wenn zwischenzeitlich was released wurde).
 - Meldet eine neue Version **einmal**, nicht bei jedem Check erneut, solange nicht upgedatet wird.
 - Netzwerkfehler (z.B. offline) landen nur im Log, es gibt keinen Alert-Spam.
-- Nutzt für die Meldung dieselbe Toast+ntfy-Infrastruktur wie die Temperatur-Alerts — die ntfy-Einstellungen von oben gelten auch hier, der Toast kommt aber auch mit `$EnableNtfy = $false`.
+- Nutzt für die Meldung dieselbe Toast+ntfy-Infrastruktur wie die Temperatur-Alerts, der Toast kommt auch mit `$EnableNtfy = $false`.
+
+**2) Download und Bereitstellen** (`$EnableAutoDownload`)
+
+1. Lädt `HWiNFO-ThermalGuard.ps1` aus dem Release (Fallback: die Rohdatei am Tag).
+2. **Prüft den SHA-256** gegen den Hash, der mit dem Release veröffentlicht wurde: ein Asset `HWiNFO-ThermalGuard.ps1.sha256` (Inhalt: der Hash, optional mit Dateiname) oder ein Asset `SHA256SUMS` im üblichen Format `<hash>  <datei>`.
+3. Prüft die **Syntax** (Parser, ohne Ausführen).
+4. Sichert die laufende Datei als `HWiNFO-ThermalGuard.backup-vX.Y.ps1`, wobei `X.Y` die Version ist, die die Datei **enthält**.
+5. Stellt das Update als `HWiNFO-ThermalGuard.pending-vX.Y.ps1` bereit (mit `.sha256`-Datei daneben) und meldet das per Toast + ntfy.
+
+Ein fehlgeschlagener Download wird beim nächsten Check erneut versucht. Eine Version, die abgelehnt wurde (Hash passt nicht, Syntaxfehler, kein Hash), wird innerhalb eines Laufs nicht in jedem Intervall erneut geladen (nach einem Neustart des Guards wird sie noch einmal bewertet).
+
+**3) Installieren**
+
+*Manuell (empfohlen):* in einer **Administrator-PowerShell** im Script-Ordner
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Approve-ThermalGuardUpdate.ps1
+```
+
+Das Script zeigt Version, SHA-256, Hash- und Syntax-Check des bereitgestellten Updates und fragt nach (`-Yes` überspringt die Frage, `-ListOnly` zeigt nur an). Dann läuft der Installer des laufenden Scripts:
+
+```text
+Hash des bereitgestellten Files erneut prüfen → Syntax erneut prüfen
+  → frische Sicherung der laufenden Datei (backup-v<laufende Version>)
+  → Task deaktivieren, alte Instanz stoppen
+  → Austausch
+  → Task aktivieren, neue Version starten
+  → bis zu 90 s auf den Health-Marker im Log warten
+        ├── gefunden:  Meldung "ThermalGuard updated"
+        └── nicht gefunden: ROLLBACK (Sicherung zurück, neu starten, Meldung "rolling back",
+                            Datei failed-vX.Y.txt, damit dieselbe Version nicht in einer Schleife neu installiert wird)
+```
+
+Der **Health-Marker** ist die Logzeile `=== HEALTHY: first successful sensor poll (...) ===`. Die schreibt die neue Version erst nach dem ersten Poll, in dem **alle** primären Temperatursensoren (CPU und GPU, soweit aktiviert) einen gültigen Wert liefern, der Guard also nicht blind ist. "Software Check complete" reicht bewusst nicht: die Zeile steht auch im Fehlerfall im Log.
+
+*Automatisch* (`$EnableAutoInstall = $true`, braucht `$EnableAutoDownload = $true`): derselbe Installer, ohne dass du bestätigst. **Für ein Script, das bei Überhitzung den PC herunterfährt, nicht empfohlen.**
+
+Läuft das Setup über `shell:startup` statt über den Task, startet der Installer die neue Version über `Start-HWiNFO-Remote.vbs`.
+
+#### Update-Sicherheit
+
+- **Nie bei Hitze:** Ein Update wird weder geprüft noch bereitgestellt noch installiert, solange ein Sensor im Stufe-2/3-Timer ist oder der [Daten-Failsafe](#failsafe-bei-datenverlust) zählt. Überhitzungsschutz geht immer vor.
+- **Der Hash ist kein Vertrauensanker.** Er kommt aus demselben Release wie die Datei. Er schützt vor einem kaputten oder auf dem Weg manipulierten Download, **nicht** vor einem kompromittierten Repo oder Maintainer-Konto. Wer das Repo nicht selbst kontrolliert, lässt `$EnableAutoInstall` aus und schaut sich die Datei vor `Approve` an.
+- **Ohne Hash:** Mit `$UpdateRequireHash = $true` (Standard) wird nichts bereitgestellt. Mit `$false` wird das Update als **UNVERIFIED** bereitgestellt und **nie automatisch** installiert, auch nicht mit `$EnableAutoInstall = $true`. Der Installer verlangt dann außerdem `$UpdateRequireHash = $false`, wenn keine `.sha256`-Datei neben dem bereitgestellten File liegt.
+- **Manipulation nach dem Download:** Der Installer prüft das bereitgestellte File direkt vor dem Austausch noch einmal gegen die gespeicherte `.sha256`-Datei.
+- **Rollback-Quelle ist immer die Datei, die unmittelbar vor dem Austausch lief**, auch beim zweiten, dritten Update.
+- **Erste Runde:** Der Installer läuft aus der *alten* Datei. Verbesserungen am Installer selbst greifen deshalb erst beim Update *von* der neuen Version weg. Den Schritt auf v1.51 machst du von Hand (Datei ersetzen).
+- Zwischen "alte Instanz gestoppt" und "erster Poll der neuen" (normalerweise deutlich unter einer Minute) überwacht niemand die Temperaturen: nicht bei heißem oder ausgelastetem PC installieren.
 
 ### Schwellwerte
 
@@ -222,6 +309,23 @@ $Stage2Delay  = 30    # Sekunden bis Programme beendet werden
 $Stage3Delay  = 90    # Sekunden bis Shutdown (gesamt ab Trigger)
 ```
 
+### Failsafe bei Datenverlust
+
+Ohne Sensordaten ist ThermalGuard blind. Früher gab es dann nur Alarme, während die Stufe-2/3-Timer (die einen Messwert brauchen) einfroren: Fällt HWiNFO mitten in der Hitze aus, passierte nichts mehr. Jetzt zählt auch das Blindsein:
+
+```powershell
+$EnableDataLossFailsafe = $true
+$DataLossStage2Sec      = 180   # nach 3 min blind: Prozessliste beenden (wie Stufe 2)
+$DataLossShutdownSec    = 420   # nach 7 min blind: Notabschaltung (wie Stufe 3)
+```
+
+- **Blind** heißt: kein gültiger Wert für `CPU Tctl/Tdie` (wenn `$EnableCPU`) bzw. `GPU Temperature` (wenn `$EnableGPU`). Also: Endpoint nicht erreichbar, HWiNFO tot, Label nicht gefunden, Einheit ist keine Temperatur, Wert außerhalb -20..150 °C.
+- Der Zähler startet beim ersten blinden Poll und wird zurückgesetzt, sobald wieder gültige Werte kommen. Normale Watchdog-Neustarts (HWiNFO ca. 25 s, 12h-Reset ca. 30 s) liegen weit unter den 180 s.
+- Solange der Zähler läuft, gibt es keinen Update-Check, und der 12h-Reset wird aufgeschoben.
+- Die normalen Alarme ("data source offline", "Sensor missing") kommen weiterhin lange vorher.
+- **Nach einem Hardwaretausch:** Sensor-Labels im Self-Test-Log prüfen (siehe [Sensor-Labels prüfen](#sensor-labels-prüfen-bei-problemen)). Passt das Label nicht, wäre der Guard blind und der Failsafe fährt nach 7 Minuten herunter. Während eines Tauschs wie bisher `$EnableGPU = $false` setzen.
+- Abschalten: `$EnableDataLossFailsafe = $false` (altes Verhalten: nur Alarm).
+
 ### Prozessliste (Stufe 2)
 
 ```powershell
@@ -254,32 +358,52 @@ $RemoteHWInfo_Path  = ""    # leer = auto-scan
 
 ## Autostart einrichten
 
-### Methode 1: shell:startup (empfohlen)
+### Methode 1: Geplanter Task (empfohlen)
 
-1. `.bat` und `.vbs` im **gleichen Ordner** (z.B. `C:\Tools\HWiNFO-ThermalGuard\`)
+1. Alle Dateien in einen Ordner (z.B. `C:\Tools\HWiNFO-ThermalGuard\`)
+2. In einer **Administrator-PowerShell** einmalig ausführen:
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\Install-ScheduledTask.ps1
+   ```
+
+Das legt den Task `HWiNFO Thermal Guard` an. Er startet beim Anmelden **mit höchsten Rechten, ohne UAC-Abfrage**, und wiederholt sich alle 5 Minuten (**Selbstheilung**): Läuft der Guard, beendet sich der Launcher lautlos. Ist der Guard abgestürzt, startet er ihn neu. Früher blieb ein abgestürzter Guard bis zur nächsten Anmeldung tot.
+
+- Anderes Intervall: `-RepeatMinutes 10`. Ohne Wiederholung (nur Start bei Anmeldung): `-RepeatMinutes 0`.
+- Das Script liest am Ende aus, was Windows tatsächlich gespeichert hat, und warnt, wenn keine Wiederholung aktiv ist.
+- Sofort testen: `Start-ScheduledTask -TaskName 'HWiNFO Thermal Guard'`
+- **Nicht zusätzlich** die `.vbs` in `shell:startup` legen, sonst startet die Kette doppelt.
+
+### Methode 2: shell:startup (ohne Selbstheilung)
+
+1. `.bat` und `.vbs` im **gleichen Ordner**
 2. `Win+R` → `shell:startup` → Enter
 3. Rechtsklick auf `.vbs` → **Verknüpfung erstellen** → Verknüpfung in den startup-Ordner verschieben
+
+Nachteile: kein UAC-freier Start mit Administratorrechten (das Script braucht sie für `shutdown.exe` und zum Beenden von Prozessen) und keine Wiederholung nach einem Absturz. Nur sinnvoll, wenn dein Konto ohnehin ohne UAC-Abfrage mit Adminrechten startet.
 
 ### Was beim Start passiert
 
 ```text
-Start-HWiNFO-Remote.vbs (unsichtbar)
+Task (Anmeldung + alle 5 Min)   oder   Start-HWiNFO-Remote.vbs (unsichtbar)
     └── Start-HWiNFO-Remote.bat
+            ├── Schnellcheck: ThermalGuard läuft schon? → lautlos beenden
             ├── PowerShell 7 oder 5.1 erkennen
-            ├── Shared Memory per Registry aktivieren
-            ├── -Resolve: Pfade scannen + fehlende Software downloaden
-            ├── HWiNFO64 starten (oder überspringen wenn läuft)
-            ├── 15s warten auf Sensor-Initialisierung
-            ├── RemoteHWInfo starten (oder überspringen wenn läuft)
-            ├── HTTP-Endpoint prüfen
-            └── ThermalGuard starten (oder überspringen wenn läuft)
+            ├── Bekannte Script-Dateien entsperren (Mark-of-the-Web)
+            └── HWiNFO-ThermalGuard.ps1 starten (versteckt)
+                    ├── Shared Memory per Registry aktivieren
+                    ├── Pfade scannen, fehlende Software downloaden
+                    ├── HWiNFO64, RemoteHWInfo (und fipha) starten, falls sie nicht laufen
+                    └── ab hier: Überwachung + Watchdog
 ```
 
-Alle Prozesse haben Duplikat-Schutz. Die `.bat` kann beliebig oft ausgeführt werden — was schon läuft wird übersprungen.
+Die `.bat` startet und prüft **nicht** selbst HWiNFO64, RemoteHWInfo oder fipha: das macht ausschließlich `HWiNFO-ThermalGuard.ps1`. Die `.bat` kann beliebig oft ausgeführt werden. Läuft der Guard schon, passiert nichts. Der Duplikat-Check ignoriert Installer- und Dry-Run-Instanzen (`-InstallPendingUpdate`, `-DryRun`, `-SimulateTemp`). Der Log der **letzten echten Startsequenz** steht in `%USERPROFILE%\HWiNFO-ThermalGuard\autostart.log`; die lautlosen Wiederholungen überschreiben ihn nicht.
 
 ---
 
 ## Pfad-Scan Reihenfolge
+
+Gescannt wird nur eine feste Liste von Ordnern (jeweils inklusive Unterordnern bis Tiefe 3, es gewinnt die größte passende Datei). Desktop und Downloads werden **bewusst nicht** durchsucht (Sicherheit): liegt deine Installation dort, setze den `*_Path`-Override oder verschiebe sie nach `C:\Tools\`.
 
 ### HWiNFO64
 
@@ -287,22 +411,25 @@ Alle Prozesse haben Duplikat-Schutz. Die `.bat` kann beliebig oft ausgeführt we
 2. `C:\Program Files\HWiNFO64\`
 3. `C:\Program Files (x86)\HWiNFO64\`
 4. `C:\Tools\HWiNFO64\`
-5. `C:\Tools\`
-6. Desktop
-7. Downloads
-8. System PATH
-9. Auto-Install via `winget install REALiX.HWiNFO`
+5. `C:\Tools\` (inkl. Unterordner)
+6. System-PATH
+7. Auto-Install via `winget install REALiX.HWiNFO`
 
 ### RemoteHWInfo
 
 1. Manueller Override (`$RemoteHWInfo_Path`)
 2. `C:\Tools\RemoteHWInfo\`
-3. `C:\Tools\`
-4. Desktop
-5. Downloads
-6. `Desktop\Software_Treiber_Games\Software+Tools\`
-7. Script-Ordner
-8. Auto-Download von GitHub → `C:\Tools\RemoteHWInfo\`
+3. `C:\Tools\` (inkl. Unterordner, findet z.B. `C:\Tools\RemoteHWInfo_v0.5\`)
+4. System-PATH
+5. Auto-Download von GitHub → `C:\Tools\RemoteHWInfo\` (der SHA-256 des Downloads wird nur geloggt, nicht gegen einen festen Wert geprüft: gegen die Release-Seite abgleichen)
+
+### fipha (nur mit `$EnableFipha = $true`)
+
+1. Manueller Override (`$Fipha_Path`)
+2. `C:\Tools\fipha\`
+3. `C:\Tools\` (inkl. Unterordner)
+
+Wird fipha nicht gefunden, gibt es nur eine Warnung im Log.
 
 ---
 
@@ -343,26 +470,65 @@ Alle Prozesse haben Duplikat-Schutz. Die `.bat` kann beliebig oft ausgeführt we
 
 ---
 
+## Zusatzmeldungen (Info-Alerts)
+
+Neben den CPU/GPU-Warn/Crit-Sensoren gibt es rein informative Meldungen. Sie lösen **nie** Stufe 2/3 aus.
+
+- **All-Temps-Report** (`$EnableAllTempsReport`): scannt *jede* Temperatur, die HWiNFO meldet (Kerne, VRM, Chipsatz, SSD, Mainboard, RAM, ...), und meldet, was gerade auffällig ist. Zwei Kategorien mit eigenen Schwellen (`$AllTempsReportThreshold_CpuGpu = 75`, `$AllTempsReportThreshold_Board = 55`). Alles, was zu keiner passt, nutzt die CPU/GPU-Schwellen. Mit Hysterese: Eine Meldung entsteht beim Report-Wert und endet erst unter dem niedrigeren Track-Wert (60 / 50), damit ein Wert, der um die Schwelle pendelt, nicht jede Runde meldet. Die Sensoren mit eigener Warn/Crit-Logik (CPU, GPU, Hotspot, Memory Junction) sind hier ausgenommen.
+- **Performance-Limit-Flags** (`$EnablePerfLimitAlerts`, nur NVIDIA): Meldung bei Wechsel von "aus" auf "an" und zurück für Power-, Thermal-, Reliability-Voltage- und Max-Operating-Voltage-Limit.
+- **Warnungen** der CPU/GPU-Sensoren (Warn-Schwelle erreicht) laufen ebenfalls hier durch.
+- **Digest:** All diese Info-Meldungen werden gesammelt und höchstens alle `$InfoAlertCooldownMinutes` (45) als **eine** Sammelmeldung verschickt. Die allererste geht sofort raus. **Kritische Alarme (Crit, Stufe 2/3, Fail-safe) sind davon nicht betroffen und gehen immer sofort raus.**
+
+---
+
+## Simulation / Dry-Run
+
+Stufe 2 und 3 lassen sich testen, ohne den PC zu überhitzen:
+
+```powershell
+# CPU-Temperatur vortäuschen (95 Grad). Impliziert -DryRun: es wird nichts beendet oder heruntergefahren.
+pwsh -File .\HWiNFO-ThermalGuard.ps1 -SimulateTemp 95
+
+# Echte Messwerte, aber Stufe 2/3 nur ins Log schreiben
+pwsh -File .\HWiNFO-ThermalGuard.ps1 -DryRun
+```
+
+- Stufe 2 loggt `[DRYRUN] would kill: <prozess>`, Stufe 3 loggt `[DRYRUN] would run: shutdown.exe ...` und beendet danach das Script (Simulation zu Ende).
+- Toast und ntfy kommen wirklich an, der Titel trägt `[DRYRUN]`. So lässt sich auch der Benachrichtigungsweg testen.
+- Der Zeitablauf ist echt: Alarm sofort, "Stufe 2" nach `$Stage2Delay`, "Shutdown" nach `$Stage3Delay`.
+- Watchdog, Update-Check und Update-Installer sind in diesem Modus aus. Die Instanz zählt für den Launcher nicht als "ThermalGuard läuft" und kann parallel zur echten laufen. Sie schreibt in dasselbe Log (Zeilen mit `[DRYRUN]`).
+- Das Failsafe bei Datenverlust nutzt dieselben Aktionen und wird damit ebenfalls nur geloggt.
+
+---
+
+## Firewall-Härtung
+
+RemoteHWInfo ist ein allgemeiner HTTP/JSON-Server ohne dokumentierte Option, nur auf Loopback zu lauschen. Mit `$EnableFirewallHardening = $true` (Standard) legt das Script daher beim Start eine eingehende Blockier-Regel `HWiNFO-ThermalGuard-Block-NonLocal-60000` für den Port (`$RemoteHWInfoPort`) an, damit andere Geräte im Netz die Sensordaten nicht abrufen können. Das braucht Administratorrechte. Scheitert es, steht eine Warnung im Log. Wieder entfernen: `Remove-NetFirewallRule -DisplayName 'HWiNFO-ThermalGuard-Block-NonLocal-60000'`. Kommt trotz Regel keine Verbindung zustande, setze `$EnableFirewallHardening = $false`.
+
+---
+
 ## Logging
 
 ```text
 %USERPROFILE%\HWiNFO-ThermalGuard\thermalguard.log
 ```
 
-Beispiel:
+Beispiel (gekürzt):
 
 ```text
-[2026-05-18 14:23:01] [INFO] HWiNFO Thermal Guard v1.42 gestartet
-[2026-05-18 14:23:01] [INFO] PowerShell: 7.6.1 (Core)
-[2026-05-18 14:23:01] [INFO] GPU-Profil: NVIDIA
-[2026-05-18 14:23:02] [OK]   HWiNFO64 Gefunden: C:\Program Files\HWiNFO64\HWiNFO64.exe
-[2026-05-18 14:23:03] [OK]   RemoteHWInfo Gefunden: C:\Tools\RemoteHWInfo\RemoteHWInfo.exe
-[2026-05-18 14:23:04] [OK]   HTTP-Endpoint: 263 Readings
-[2026-05-18 15:41:22] [WARN] GPU Temperature VORWARNUNG: 84 Grad
-[2026-05-18 15:42:05] [CRIT] GPU Temperature KRITISCH: 91 — Timer gestartet
+[2026-10-02 14:23:01] [INFO] HWiNFO Thermal Guard v1.51 started
+[2026-10-02 14:23:01] [INFO] PowerShell:      7.6.1 (Core)
+[2026-10-02 14:23:01] [INFO] GPU Profile:     NVIDIA
+[2026-10-02 14:23:02] [INFO] HWiNFO64        [OK] Found: C:\Program Files\HWiNFO64\HWiNFO64.exe
+[2026-10-02 14:23:04] [INFO] HTTP Endpoint   [OK] http://localhost:60000/json.json (263 readings)
+[2026-10-02 14:23:06] [INFO] === HEALTHY: first successful sensor poll (3 temperature sensor(s) resolved) ===
+[2026-10-02 15:41:22] [WARN] GPU Temperature: WARNING 84 degrees (threshold: 80)
+[2026-10-02 15:42:05] [CRIT] GPU Temperature: CRITICAL value=91, timer started
 ```
 
-Rotation bei 10 MB.
+Beim ersten erfolgreichen Poll steht außerdem ein **Self-Test** im Log: Für jeden überwachten Sensor, welche Messzeile (Label, `sensorIndex`, Einheit, Wert) er aufgelöst hat, und eine WARN-Zeile für jeden, den die echte Abfrage nicht auflösen kann.
+
+Rotation bei 10 MB. Es bleiben die letzten 10 rotierten Logs (`thermalguard_*.log`) erhalten, ältere werden gelöscht (`$MaxLogFilesToKeep`).
 
 ---
 
@@ -424,6 +590,7 @@ $EnableWatchdog       = $true   # Prozess-Überwachung an/aus
 $WatchdogIntervalSec  = 60     # Prüf-Intervall in Sekunden
 $EnableHWiNFO12hReset = $true  # Automatischer Neustart vor 12h-Limit
 $HWiNFOMaxRuntimeMin  = 690   # Neustart nach X Minuten (690 = 11.5h)
+$EndpointUnhealthyCyclesBeforeRestart = 3   # so viele Zyklen ohne Daten, dann Neustart trotz laufender Prozesse
 ```
 
 ### Was der Watchdog macht
@@ -434,10 +601,14 @@ Alle 60 Sekunden (konfigurierbar) prüft der Watchdog:
 | --- | --- |
 | HWiNFO64 Prozess weg | Automatischer Neustart + 15s warten |
 | RemoteHWInfo Prozess weg | Automatischer Neustart + 5s warten |
-| HWiNFO Laufzeit > 11.5h | Beide Prozesse stoppen → HWiNFO neu → RemoteHWInfo neu |
+| fipha Prozess weg (nur mit `$EnableFipha`) | Neustart, nur kurze Prüfung (blockiert die Schleife nicht lange) |
+| Prozesse laufen, aber Endpoint liefert keine Daten | Nach 3 Zyklen in Folge: HWiNFO64 + RemoteHWInfo hart neu starten |
+| HWiNFO Laufzeit > 11.5h | Beide Prozesse stoppen → HWiNFO neu → RemoteHWInfo neu (**aufgeschoben**, solange ein Stufe-2/3-Timer oder der Daten-Failsafe läuft) |
 | Endpoint offline | Sofortiger Watchdog-Check (normales Intervall überspringen) |
 
 Derselbe 60s-Takt stößt (intern selbst auf `$UpdateCheckIntervalHours` gedrosselt) auch den Update-Check an, siehe oben.
+
+**Grenze:** Ein Neustart-Schritt blockiert die Polling-Schleife für die Dauer seiner Wartezeiten (HWiNFO 15 s + RemoteHWInfo 5 s, beim 12h-Reset zusammen ca. 25-30 s). Das fällt fast immer mit der Zeit zusammen, in der HWiNFO ohnehin keine Daten liefert, weil es gerade neu startet. Ein laufender Stufe-2/3-Timer wird dabei nicht angehalten, nur seine Auswertung verzögert sich um höchstens diese Zeit. Der 12h-Reset selbst wird bei laufendem Timer aufgeschoben.
 
 ### 12h-Reset Ablauf
 
@@ -474,6 +645,12 @@ Falls ein Sensor nicht erkannt wird, Labels manuell prüfen:
 2. Browser → `http://localhost:60000/json.json`
 3. Strg+F → nach dem Sensor suchen
 4. `labelOriginal` im JSON mit `SensorMatch` im Script vergleichen
+
+Schneller: Beim ersten Poll schreibt das Script einen **Self-Test** ins Log (siehe [Logging](#logging)), der zeigt, welche Zeile je Sensor aufgelöst wurde. Eine WARN-Zeile `NOT resolved by the live lookup` heißt: Label, Index oder Einheit passt nicht.
+
+`Get-SensorDump.ps1` sammelt alle Sensoren mit Einheit (inkl. Unicode-Codepoints der Einheit) und min/avg/max über 120 s in einer Datei, siehe [Sensordaten beisteuern](#sensordaten-beisteuern).
+
+**Einheiten-Filter:** Für die überwachten Temperatur-Sensoren (CPU, GPU, Hotspot, Memory Junction) wird eine Messzeile nur verwendet, wenn ihre Einheit wie eine Temperatur aussieht (`°C`, `C`, `deg C`; bis zu drei Zeichen vor dem `C`, damit auch ein durch Kodierungsfehler verstümmeltes Gradzeichen durchgeht). Watt, Volt, RPM, Prozent und Ähnliches werden nie als Temperatur genommen, auch wenn das Label passt. Beispiel: `CPU Package` darf nicht auf `CPU Package Power` fallen.
 
 ---
 
@@ -527,6 +704,18 @@ Install-Module BurntToast -Force -Scope CurrentUser
 
 Windows Fokus-Assistent muss **aus** sein: Windows Einstellungen → System → Benachrichtigungen → Fokus-Assistent → Aus
 
+### "SensorMatch ... only matched readings whose unit is not a temperature"
+
+Der Einheiten-Filter hat alle Messzeilen für dieses Label abgelehnt, weil keine eine Temperatur-Einheit hat. Prüfen, was HWiNFO für den Sensor liefert (`Get-SensorDump.ps1`, dort steht die Einheit samt Codepoints). Eine fälschlich abgelehnte Temperatur-Einheit bitte als Issue melden. Der Sensor gilt bis dahin als fehlend (Alarm nach ca. 15 s, mit Failsafe ggf. Abschaltung nach 7 min).
+
+### ThermalGuard hat den PC ohne Überhitzung heruntergefahren
+
+Im Log nach `Data-loss fail-safe` suchen. Das Failsafe fährt herunter, wenn das Script 7 Minuten lang keinen gültigen CPU/GPU-Wert hatte (HWiNFO weg, Label passt nach Hardwaretausch nicht mehr, Shared Memory aus). Ursache beheben oder das Failsafe mit `$EnableDataLossFailsafe = $false` abschalten.
+
+### Update wurde nicht bereitgestellt oder installiert
+
+Im Log nach `Update install` suchen. Häufige Gründe: kein SHA-256 am Release (`$UpdateRequireHash`), Hash passt nicht, Syntaxfehler, oder `HWiNFO-ThermalGuard.failed-vX.Y.txt` existiert (diese Version ist bei dir schon einmal durchgefallen: Datei löschen, um sie erneut zu erlauben). Mit `$EnableAutoInstall` wird ein Update ohne verifizierten Hash nie automatisch installiert.
+
 ---
 
 ## PowerShell-Kompatibilität
@@ -546,33 +735,33 @@ Die `.bat` erkennt automatisch ob `pwsh.exe` (PS7) verfügbar ist und bevorzugt 
 ## Architektur
 
 ```text
-Start-HWiNFO-Remote.vbs (shell:startup)
+Task "HWiNFO Thermal Guard" (Anmeldung + alle 5 Min)   oder   Start-HWiNFO-Remote.vbs
     │
-    └── Start-HWiNFO-Remote.bat
+    └── Start-HWiNFO-Remote.bat      (Schnellcheck, PowerShell-Erkennung, Unblock)
             │
-            ├── PS-Version erkennen (pwsh oder powershell)
-            ├── Shared Memory Registry setzen
-            ├── -Resolve: Pfade scannen + Auto-Download
-            │       ├── HWiNFO64 suchen → winget install
-            │       └── RemoteHWInfo suchen → GitHub ZIP
-            │
-            ├── HWiNFO64.exe starten
-            ├── RemoteHWInfo.exe starten (hidden)
-            └── HWiNFO-ThermalGuard.ps1 starten (hidden)
+            └── HWiNFO-ThermalGuard.ps1      (einziger Supervisor)
                     │
-                    ├── BurntToast prüfen/installieren
-                    ├── Alle Prozesse + Endpoint prüfen
+                    ├── Shared Memory Registry setzen
+                    ├── Software-Check: HWiNFO64, RemoteHWInfo, BurntToast, (fipha), ntfy, Firewall-Regel
+                    │       ├── HWiNFO64 suchen → winget install
+                    │       └── RemoteHWInfo suchen → GitHub ZIP
                     ├── Watchdog alle 60s
-                    │       ├── HWiNFO64 alive? → Neustart wenn down
-                    │       ├── RemoteHWInfo alive? → Neustart wenn down
-                    │       ├── HWiNFO > 11.5h? → 12h-Reset
-                    │       └── Update-Check (gedrosselt auf Intervall)
+                    │       ├── HWiNFO64 / RemoteHWInfo / fipha alive? → Neustart wenn down
+                    │       ├── Endpoint liefert Daten? → nach 3 Zyklen Neustart
+                    │       ├── HWiNFO > 11.5h? → 12h-Reset (aufgeschoben bei Stufe 2/3)
+                    │       └── Update-Check (gedrosselt) → optional Download + Bereitstellen
                     ├── Polling-Loop alle 5s
-                    │       ├── Stufe 1: Toast + ntfy
-                    │       ├── Stufe 2: taskkill
-                    │       └── Stufe 3: shutdown.exe
+                    │       ├── CPU / GPU / Hotspot / Memory Junction / Lüfter: Warn (Digest), Crit (sofort)
+                    │       ├── Stufe 1: Toast + ntfy → Stufe 2: Prozesse beenden → Stufe 3: shutdown.exe
+                    │       ├── Daten-Failsafe: blind → Stufe 2 → Stufe 3
+                    │       ├── All-Temps-Report + Perf-Limit-Flags → Info-Digest
+                    │       └── Health-Marker im Log (für den Update-Installer)
                     │
                     └── Log → %USERPROFILE%\HWiNFO-ThermalGuard\
+
+Approve-ThermalGuardUpdate.ps1 ──► HWiNFO-ThermalGuard.ps1 -InstallPendingUpdate   (eigener Prozess:
+                                   prüfen → sichern → tauschen → Health-Check → ggf. Rollback)
+Get-SensorDump.ps1             ──► liest nur, schreibt ThermalGuard-SensorDump.txt
 ```
 
 ---
@@ -581,6 +770,11 @@ Start-HWiNFO-Remote.vbs (shell:startup)
 
 - **HWiNFO Free 12h-Limit** wird automatisch behandelt: Watchdog startet HWiNFO + RemoteHWInfo vor Ablauf neu (Standard: nach 11.5h). Mit `$EnableHWiNFO12hReset = $false` abschaltbar. HWiNFO Pro hat kein Limit.
 - **RemoteHWInfo Watchdog** erkennt Abstürze und startet den Prozess automatisch neu. Bei Endpoint-Ausfall wird sofort ein Watchdog-Check erzwungen.
+- **Neustart-Schritte blockieren das Polling** kurz (siehe [Watchdog](#was-der-watchdog-macht)). Das passiert fast nur, während HWiNFO ohnehin keine Daten liefert.
+- **GPU Fan 2** (NVIDIA, wo vorhanden) wird erst überwacht, nachdem er in diesem Lauf einmal über 0 RPM gesehen wurde. So löst ein Phantom-Sensor mit 0 RPM auf einer Karte ohne echten zweiten Lüfter nie Stufe 2/3 aus. Ein Lüfter, der schon beim Start tot ist, wird deshalb nicht erkannt. Fehlt `GPU Fan2`, gibt es keinen Alarm.
+- **Daten-Failsafe** kann einen unnötigen Shutdown auslösen, wenn die Sensor-Anbindung länger als 7 Minuten ausfällt (siehe [Failsafe](#failsafe-bei-datenverlust)). Dafür ist man dann nicht mehr blind unterwegs.
+- **Update-Hash** schützt nicht vor einem kompromittierten Repo, siehe [Update-Sicherheit](#update-sicherheit).
+- **ntfy-Passwort** steht im Klartext im Script (siehe [ntfy](#ntfy-einrichten)).
 - **12V-2x6 Pin-Überwachung** ist bei der ASUS Prime 5070 Ti nicht nativ über Software-Telemetrie verfügbar (Power Detector+ nur bei ROG Astral/Matrix).
 - **Toast im Vollbild** wird von Windows unterdrückt. ntfy ist die Absicherung.
 - **Auto-Download** benötigt Internetzugang beim ersten Start. Danach offline-fähig.
@@ -593,7 +787,7 @@ Intel CPUs und Intel Arc GPUs fehlen aktuell, weil die genauen HWiNFO-Sensor-Lab
 auf echter Hardware bestätigt werden müssen, statt geraten zu werden. Wer eins
 davon hat, kann in 2-3 Minuten helfen: [Issue-Formular öffnen](../../issues/new?template=report.yml),
 `Get-SensorDump.ps1` laufen lassen (sampled 120s, idealerweise mit
-Last/Spiel dazwischen) und die Ausgabe reinpasten.
+Last/Spiel dazwischen) und den Inhalt der erzeugten Datei `%USERPROFILE%\HWiNFO-ThermalGuard\ThermalGuard-SensorDump.txt` reinpasten (vorher kurz durchlesen: enthält Hardware-Modellnamen, aber keinen Benutzer- oder Rechnernamen).
 
 `Get-SensorDump.ps1` setzt voraus, dass HWiNFO64 + RemoteHWInfo bereits laufen
 (also `HWiNFO-ThermalGuard.ps1` bzw. den `.bat`-Launcher vorher starten und
