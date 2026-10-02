@@ -54,7 +54,7 @@ if (-not [double]::IsNaN($SimulateTemp)) { $DryRun = [switch]$true }
 # verification of downloads), data-loss fail-safe, GPU Fan2, temperature unit
 # filter, -DryRun / -SimulateTemp, ntfy auth, log retention, Tls11 removed,
 # fipha off by default. See README.
-$ScriptVersion = "1.51"
+$ScriptVersion = "1.52"
 
 # --- TLS (GLOBAL, EARLY) -----------------------------------------------------
 # PowerShell 5.1 / .NET Framework does not always default to TLS 1.2, which
