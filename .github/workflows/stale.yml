@@ -21,6 +21,10 @@ jobs:
         with:
           days-before-stale: 30
           days-before-close: 7
+          # Issues only. Without these two lines the same 30+7 days also apply
+          # to pull requests, so an open auto/version-sync PR would be closed.
+          days-before-pr-stale: -1
+          days-before-pr-close: -1
           stale-issue-label: stale
           stale-issue-message: >
             This issue has had no activity for 30 days and has been marked as stale.

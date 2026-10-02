@@ -31,9 +31,13 @@ jobs:
       - name: Determine tag
         id: tag
         shell: pwsh
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
         run: |
+          # The dispatch input goes in via env, not interpolated into the
+          # script text, so a crafted tag name can never become code.
           if ($env:GITHUB_EVENT_NAME -eq "workflow_dispatch") {
-            $tag = "${{ github.event.inputs.tag }}"
+            $tag = $env:INPUT_TAG
           } else {
             $tag = $env:GITHUB_REF_NAME
           }
@@ -42,8 +46,10 @@ jobs:
 
       - name: Validate tag format
         shell: pwsh
+        env:
+          TAG: ${{ steps.tag.outputs.TAG }}
         run: |
-          $tag = "${{ steps.tag.outputs.TAG }}"
+          $tag = $env:TAG
           # Git tags can't contain whitespace or most special characters.
           # This also catches the "v1.42 stable" style typo before it hits
           # the GitHub API and fails with a cryptic 422.
@@ -53,10 +59,36 @@ jobs:
           }
           Write-Host "Tag '$tag' is valid."
 
+      - name: Check tag against $ScriptVersion
+        # A release whose tag and $ScriptVersion disagree would make every
+        # installed copy think it is outdated forever (update check compares
+        # the tag with $ScriptVersion). Test/pre-release tags (v1.5-test) are
+        # exempt: they have a suffix on purpose.
+        shell: pwsh
+        env:
+          TAG: ${{ steps.tag.outputs.TAG }}
+        run: |
+          $m = Select-String -Path HWiNFO-ThermalGuard.ps1 -Pattern '^\$ScriptVersion\s*=\s*"([^"]+)"' | Select-Object -First 1
+          if (-not $m) {
+            Write-Error "Could not find `$ScriptVersion in HWiNFO-ThermalGuard.ps1"
+            exit 1
+          }
+          $ver = $m.Matches[0].Groups[1].Value
+          if ($env:TAG -match '-') {
+            Write-Host "Tag '$($env:TAG)' has a suffix (test / pre-release): skipping the version match. ScriptVersion is $ver."
+          } elseif ($env:TAG -ne "v$ver") {
+            Write-Error "Tag '$($env:TAG)' does not match `$ScriptVersion '$ver' in HWiNFO-ThermalGuard.ps1. Fix one of them first."
+            exit 1
+          } else {
+            Write-Host "Tag $($env:TAG) matches `$ScriptVersion $ver."
+          }
+
       - name: Build ZIP archive
         shell: pwsh
+        env:
+          TAG: ${{ steps.tag.outputs.TAG }}
         run: |
-          $tag = "${{ steps.tag.outputs.TAG }}"
+          $tag = $env:TAG
           $archive = "ThermalGuard-$tag.zip"
 
           $files = @(
@@ -64,6 +96,7 @@ jobs:
             "Start-HWiNFO-Remote.bat",
             "Start-HWiNFO-Remote.vbs",
             "Install-ScheduledTask.ps1",
+            "Approve-ThermalGuardUpdate.ps1",
             "Get-SensorDump.ps1",
             "README.md",
             "README.en.md",
@@ -80,11 +113,27 @@ jobs:
           Compress-Archive -Path $files -DestinationPath $archive -CompressionLevel Optimal
           Write-Host "Created $archive ($($(Get-Item $archive).Length) bytes)"
 
+      - name: Create standalone script asset and SHA-256
+        # The in-script update download (HWiNFO-ThermalGuard.ps1, v1.51+) wants
+        # the script as its own release asset plus "<script>.sha256" and
+        # refuses a release without a hash. The hash is taken from the very
+        # file that is uploaded, so the two can never disagree.
+        shell: pwsh
+        run: |
+          $name = "HWiNFO-ThermalGuard.ps1"
+          $hash = (Get-FileHash -Path $name -Algorithm SHA256).Hash.ToLowerInvariant()
+          $out  = Join-Path (Get-Location).Path "$name.sha256"
+          [System.IO.File]::WriteAllText($out, "$hash  $name`n", [System.Text.Encoding]::ASCII)
+          Write-Host "$hash  $name"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.tag.outputs.TAG }}
-          files: ThermalGuard-*.zip
+          files: |
+            ThermalGuard-*.zip
+            HWiNFO-ThermalGuard.ps1
+            HWiNFO-ThermalGuard.ps1.sha256
           generate_release_notes: true
           fail_on_unmatched_files: true
           # Tag pushes (real releases pushed directly) are never a
@@ -92,3 +141,26 @@ jobs:
           # true by default for manual test releases, but tag-and-release.yml
           # passes "false" explicitly for real version-bump releases.
           prerelease: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.prerelease == 'true' }}
+
+      - name: Verify the uploaded assets
+        # Download what was just published and check it against its own hash.
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.tag.outputs.TAG }}
+        run: |
+          New-Item -ItemType Directory -Path verify -Force | Out-Null
+          gh release download $env:TAG --dir verify --clobber `
+            --pattern "HWiNFO-ThermalGuard.ps1" --pattern "HWiNFO-ThermalGuard.ps1.sha256"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Could not download the uploaded assets of $($env:TAG)."
+            exit 1
+          }
+          $expected = ((Get-Content "verify/HWiNFO-ThermalGuard.ps1.sha256" -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+          $actual   = (Get-FileHash "verify/HWiNFO-ThermalGuard.ps1" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($expected -ne $actual) {
+            Write-Error "Hash mismatch on the published asset: expected $expected, got $actual"
+            exit 1
+          }
+          Write-Host "Published asset verified: $actual"

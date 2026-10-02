@@ -17,8 +17,10 @@ jobs:
 
     steps:
       - name: Check required secret is set
+        env:
+          ALERTS_TOKEN: ${{ secrets.DEPENDABOT_ALERTS_TOKEN }}
         run: |
-          if [ -z "${{ secrets.DEPENDABOT_ALERTS_TOKEN }}" ]; then
+          if [ -z "$ALERTS_TOKEN" ]; then
             echo "::error::DEPENDABOT_ALERTS_TOKEN secret is not set. The default"
             echo "::error::GITHUB_TOKEN can never read the Dependabot alerts API"
             echo "::error::(GitHub platform limitation, not a workflow bug)."

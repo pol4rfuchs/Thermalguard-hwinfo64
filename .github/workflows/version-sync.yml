@@ -12,6 +12,10 @@ permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: version-sync
+  cancel-in-progress: true
+
 jobs:
   sync:
     name: Sync README version with $ScriptVersion
@@ -51,6 +55,21 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
             git diff --stat
           fi
+
+      - name: Say what happens next when the README is already in sync
+        # No diff means no auto/version-sync PR, and without that PR
+        # tag-and-release.yml never fires. Make that visible instead of silent.
+        if: steps.diff.outputs.changed == 'false'
+        env:
+          VERSION: ${{ steps.script_version.outputs.version }}
+        run: |
+          {
+            echo "### README already matches \$ScriptVersion ($VERSION)"
+            echo
+            echo "No sync PR was opened, so **no release was started**."
+            echo "To release v$VERSION: Actions -> **Tag and Release** -> Run workflow."
+            echo "(It does nothing if the tag v$VERSION already exists.)"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Open pull request with the fix
         if: steps.diff.outputs.changed == 'true'

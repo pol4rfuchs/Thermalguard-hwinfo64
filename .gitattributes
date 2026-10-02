@@ -1,0 +1,8 @@
+# Windows scripts must keep CRLF line endings wherever they are checked out:
+# cmd.exe can mis-parse labels/goto in an LF-only .bat, and the release ZIP and
+# the script asset are built from a checkout. Everything else: let Git decide.
+* text=auto
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.vbs text eol=crlf
+*.ps1 text eol=crlf

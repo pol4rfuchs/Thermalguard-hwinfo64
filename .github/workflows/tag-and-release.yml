@@ -30,6 +30,11 @@ permissions:
   contents: write
   actions: write
 
+# Two merges in quick succession must not race for the same tag.
+concurrency:
+  group: tag-and-release
+  cancel-in-progress: false
+
 jobs:
   tag:
     name: Tag main with $ScriptVersion and release
