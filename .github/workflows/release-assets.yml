@@ -1,0 +1,49 @@
+name: Release assets (script + SHA-256)
+
+# When a release is published, attach the script and its SHA-256 to it.
+# The update download in HWiNFO-ThermalGuard.ps1 only accepts a version if the
+# release carries "<script>.sha256" (or SHA256SUMS). Hashing and uploading the
+# SAME checked-out file here means the hash always matches the asset.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  assets:
+    runs-on: ubuntu-latest
+    env:
+      SCRIPT: HWiNFO-ThermalGuard.ps1
+      TAG: ${{ github.event.release.tag_name }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Tag must match $ScriptVersion
+        run: |
+          ver=$(grep -m1 -oP '^\$ScriptVersion\s*=\s*"\K[^"]+' "$SCRIPT")
+          tag="${TAG#v}"
+          echo "tag=$tag  ScriptVersion=$ver"
+          if [ -z "$ver" ] || [ "$ver" != "$tag" ]; then
+            echo "::error::Tag '$TAG' does not match \$ScriptVersion '$ver' in $SCRIPT. The update check would loop. Fix the version or the tag."
+            exit 1
+          fi
+
+      - name: Create SHA-256 and upload both assets
+        run: |
+          sha256sum "$SCRIPT" > "$SCRIPT.sha256"
+          cat "$SCRIPT.sha256"
+          gh release upload "$TAG" "$SCRIPT" "$SCRIPT.sha256" --clobber
+
+      - name: Verify what was uploaded
+        run: |
+          mkdir verify
+          gh release download "$TAG" --dir verify --pattern "$SCRIPT" --pattern "$SCRIPT.sha256" --clobber
+          cd verify
+          sha256sum -c "$SCRIPT.sha256"
