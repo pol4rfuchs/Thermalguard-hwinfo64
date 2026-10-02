@@ -367,10 +367,13 @@ $RemoteHWInfo_Path  = ""    # empty = auto-scan
    powershell -ExecutionPolicy Bypass -File .\Install-ScheduledTask.ps1
    ```
 
-This creates the task `HWiNFO Thermal Guard`. It starts at logon **with highest privileges, without a UAC prompt**, and repeats every 5 minutes (**self-heal**): if the guard is running, the launcher exits silently. If the guard crashed, it starts it again. Before, a crashed guard stayed dead until the next logon.
+This creates the task `HWiNFO Thermal Guard`. It starts at logon **with highest privileges, without a UAC prompt**, and also runs from a **time trigger every 5 minutes** (**self-heal**): if the guard is running, the launcher exits silently. If the guard crashed, it starts it again within 5 minutes at the latest. Before, a crashed guard stayed dead until the next logon.
+
+Why a separate time trigger? A repetition attached to the logon trigger only starts at the next logon, so a task created in a running session did not repeat at all at first. The time trigger starts right away and keeps going after a reboot (duration 10 years, after that just run `Install-ScheduledTask.ps1` again).
 
 - Different interval: `-RepeatMinutes 10`. No repetition (start at logon only): `-RepeatMinutes 0`.
-- At the end the script reads back what Windows actually stored and warns if no repetition is active.
+- At the end the script reads back what Windows actually stored. A green line `Next scheduled run: ...` means the repetition is active. Yellow means it is stored, but Windows shows no next run yet.
+- Test: kill the guard (`Stop-Process` on the PowerShell process running `HWiNFO-ThermalGuard.ps1`) and wait at most 5 minutes. The PC is unprotected during that time, so test while idle.
 - Test right away: `Start-ScheduledTask -TaskName 'HWiNFO Thermal Guard'`
 - **Do not also** put the `.vbs` in `shell:startup`, or the chain starts twice.
 

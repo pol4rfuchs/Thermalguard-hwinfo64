@@ -367,10 +367,13 @@ $RemoteHWInfo_Path  = ""    # leer = auto-scan
    powershell -ExecutionPolicy Bypass -File .\Install-ScheduledTask.ps1
    ```
 
-Das legt den Task `HWiNFO Thermal Guard` an. Er startet beim Anmelden **mit höchsten Rechten, ohne UAC-Abfrage**, und wiederholt sich alle 5 Minuten (**Selbstheilung**): Läuft der Guard, beendet sich der Launcher lautlos. Ist der Guard abgestürzt, startet er ihn neu. Früher blieb ein abgestürzter Guard bis zur nächsten Anmeldung tot.
+Das legt den Task `HWiNFO Thermal Guard` an. Er startet beim Anmelden **mit höchsten Rechten, ohne UAC-Abfrage**, und läuft zusätzlich über einen **Zeit-Trigger alle 5 Minuten** (**Selbstheilung**): Läuft der Guard, beendet sich der Launcher lautlos. Ist der Guard abgestürzt, startet er ihn spätestens nach 5 Minuten neu. Früher blieb ein abgestürzter Guard bis zur nächsten Anmeldung tot.
+
+Warum ein eigener Zeit-Trigger? Eine Wiederholung am Anmelde-Trigger beginnt erst bei der nächsten Anmeldung. Ein mitten in einer laufenden Sitzung angelegter Task wiederholte sich deshalb zunächst gar nicht. Der Zeit-Trigger beginnt sofort und läuft auch nach einem Neustart weiter (Dauer 10 Jahre, danach `Install-ScheduledTask.ps1` einfach erneut ausführen).
 
 - Anderes Intervall: `-RepeatMinutes 10`. Ohne Wiederholung (nur Start bei Anmeldung): `-RepeatMinutes 0`.
-- Das Script liest am Ende aus, was Windows tatsächlich gespeichert hat, und warnt, wenn keine Wiederholung aktiv ist.
+- Das Script liest am Ende aus, was Windows tatsächlich gespeichert hat. Eine grüne Zeile `Next scheduled run: ...` heißt: Die Wiederholung ist aktiv. Gelb heißt: Sie ist gespeichert, aber Windows zeigt noch keinen nächsten Lauf.
+- Test: Guard abschießen (`Stop-Process` auf den PowerShell-Prozess mit `HWiNFO-ThermalGuard.ps1`) und höchstens 5 Minuten warten. In dieser Zeit ist der PC ungeschützt, also im Leerlauf testen.
 - Sofort testen: `Start-ScheduledTask -TaskName 'HWiNFO Thermal Guard'`
 - **Nicht zusätzlich** die `.vbs` in `shell:startup` legen, sonst startet die Kette doppelt.
 
