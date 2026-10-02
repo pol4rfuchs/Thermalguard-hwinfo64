@@ -211,7 +211,7 @@ $UpdateHealthCheckTimeoutSec = 90     # how long the installer waits for the new
 
 A failed download is retried at the next check. A version that was rejected (hash mismatch, syntax error, no hash) is not downloaded again at every interval within one run (after the guard restarts it is evaluated once more).
 
-**3) Install**
+**3) Install** (manual or automatic)
 
 *Manually (recommended):* from an **administrator PowerShell** in the script folder
 
