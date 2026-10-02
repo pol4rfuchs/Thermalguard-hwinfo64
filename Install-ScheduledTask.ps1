@@ -1,4 +1,4 @@
-﻿#requires -Version 5.1
+#requires -Version 5.1
 # ============================================================================
 # Install-ScheduledTask.ps1
 #
@@ -109,7 +109,27 @@ if ($RepeatMinutes -gt 0) {
     }
 }
 
-Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings | Out-Null
+# --- Time-based repetition trigger (the one that really drives the self-heal) ----
+# A repetition attached to the logon trigger only starts counting at the next
+# logon, so a task registered in a running session did not repeat at all (seen
+# in practice: the guard was killed and nothing restarted it). A plain
+# time trigger starts repeating right away, shows a NextRunTime, and keeps
+# repeating after reboots. The duration is an explicit 10 years (finite and valid
+# on every Windows version). Both triggers run the same launcher; "do not start
+# a new instance" plus the launcher's silent fast path make overlaps harmless.
+$Triggers = @($Trigger)
+if ($RepeatMinutes -gt 0) {
+    try {
+        $RepeatTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
+            -RepetitionInterval (New-TimeSpan -Minutes $RepeatMinutes) `
+            -RepetitionDuration (New-TimeSpan -Days 3650)
+        $Triggers += $RepeatTrigger
+    } catch {
+        Write-Host "WARNING: could not create the time-based repetition trigger ($($_.Exception.Message))." -ForegroundColor Yellow
+    }
+}
+
+Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Triggers -Principal $Principal -Settings $Settings | Out-Null
 
 Write-Host ""
 Write-Host "Task '$TaskName' registered successfully." -ForegroundColor Green
@@ -125,8 +145,14 @@ if ($RepeatMinutes -gt 0) {
     $stored = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     $interval = $null
     if ($stored) { $interval = ($stored.Triggers | ForEach-Object { $_.Repetition.Interval } | Where-Object { $_ } | Select-Object -First 1) }
-    if ($interval) {
+    $nextRun = $null
+    try { $nextRun = (Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction Stop).NextRunTime } catch { }
+    if ($interval -and $nextRun -and $nextRun.Year -gt 2000) {
         Write-Host "Self-heal: the launcher is re-run every $interval (ISO 8601) and exits silently while the guard is running." -ForegroundColor Green
+        Write-Host "           Next scheduled run: $nextRun" -ForegroundColor Green
+    } elseif ($interval) {
+        Write-Host "Self-heal: repetition $interval is stored, but Task Scheduler shows NO next run time yet." -ForegroundColor Yellow
+        Write-Host "           It may only start after the next logon. Test: kill the guard and see whether it comes back within $RepeatMinutes minutes." -ForegroundColor Yellow
     } else {
         Write-Host "WARNING: no repetition is stored on the task. A crashed guard will NOT be restarted until the next logon." -ForegroundColor Yellow
         Write-Host "         Check Task Scheduler -> '$TaskName' -> Triggers -> Edit -> 'Repeat task every'." -ForegroundColor Yellow
