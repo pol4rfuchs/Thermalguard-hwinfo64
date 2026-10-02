@@ -211,7 +211,7 @@ $UpdateHealthCheckTimeoutSec = 90     # so lange wartet der Installer auf die ne
 
 Ein fehlgeschlagener Download wird beim nächsten Check erneut versucht. Eine Version, die abgelehnt wurde (Hash passt nicht, Syntaxfehler, kein Hash), wird innerhalb eines Laufs nicht in jedem Intervall erneut geladen (nach einem Neustart des Guards wird sie noch einmal bewertet).
 
-**3) Installieren**
+**3) Installieren** (manuell oder automatisch)
 
 *Manuell (empfohlen):* in einer **Administrator-PowerShell** im Script-Ordner
 
