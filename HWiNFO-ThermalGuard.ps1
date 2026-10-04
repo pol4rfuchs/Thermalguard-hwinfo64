@@ -278,6 +278,17 @@ $GPU_HotspotCrit = 105
 $GPU_FanWarnRPM  = 300
 $GPU_FanCritRPM  = 0
 $GPULoadThreshold = 50
+# Fan hard-stop / fan warning only count while the GPU is actually warm. Cards
+# with a zero-RPM mode stop their fans ON PURPOSE when cool, even at 50% load,
+# so "0 RPM under load" alone is not a failure. Below this GPU temperature a
+# stopped fan is never evaluated (no warning, no Stage 2/3).
+$GPU_FanStopMinTempC = 60
+
+# A running Stage 2/3 timer is only reset once the temperature has dropped this
+# many degrees BELOW the Crit threshold. Without it a value hovering at the
+# line (87.0 / 86.9 / 87.1 ...) reset the timer on every dip below Crit and
+# never reached Stage 3.
+$CritResetHysteresisC = 2
 # GDDR6X/7 memory junction temp. Micron rates GDDR6X junction around 110 C max;
 # this leaves margin under that similar to the CPU/GPU die margins above.
 $GPU_MemJunctionWarn = 90
@@ -332,6 +343,16 @@ $DataLossShutdownSec    = 420
 $PollInterval = 5
 $Stage2Delay  = 30
 $Stage3Delay  = 90
+# Stage 3 starts "shutdown.exe /s /f /t <this>" BEFORE it sends its alert, so a
+# hanging notification can never delay the emergency stop. 10 s is the window
+# the alert gets to go out; the countdown runs regardless.
+$EmergencyShutdownDelaySec = 10
+# If the main loop did not complete an iteration for this long (PC suspended and
+# resumed, or the process was frozen), the wall-clock based Stage 2/3 timers and
+# the data-loss counter are meaningless: they would report minutes of "critical"
+# time that nobody measured. They are reset and start fresh. The longest normal
+# block in the loop (a watchdog restart) is well under a minute.
+$LoopGapResetSec = 180
 
 # --- KILL LIST (Stage 2) --------------------------------------------------------
 $KillProcesses = @(
@@ -372,8 +393,12 @@ $EndpointUnhealthyCyclesBeforeRestart = 3
 # RemoteHWInfo is documented upstream as a generic HTTP/JSON server and does
 # not expose a documented loopback-only bind flag in this version. As a
 # script-level mitigation (report finding #22) this creates an inbound block
-# rule for the RemoteHWInfo port from any non-loopback source. Requires
-# admin rights, which this script already needs for shutdown.exe.
+# rule for the RemoteHWInfo port, which blocks OTHER devices from reaching it.
+# Windows Firewall does not filter loopback traffic, so this script (and anything
+# else on this PC) keeps reading http://localhost:<port>. The flip side: a
+# remote reader on another machine (e.g. a Home Assistant host) is blocked too.
+# Set this to $false if you need that. Requires admin rights, which this script
+# already needs for shutdown.exe.
 $EnableFirewallHardening = $true
 $RemoteHWInfoPort        = 60000
 
@@ -387,6 +412,9 @@ if ($DryRun) {
 }
 
 # === INTERNAL CONFIGURATION (do not edit) ====================================
+
+# Named mutex that makes the monitoring mode single-instance (see the START block).
+$InstanceMutexName = "Global\HWiNFO-ThermalGuard-Instance"
 
 $MissingSensorAlertAfterPolls      = 3
 $MissingSensorAlertIntervalMinutes = 30
@@ -434,6 +462,24 @@ function Write-Log {
                 Remove-Item -Force -ErrorAction SilentlyContinue
         } catch { }
     }
+}
+
+# Used by the main loop to contain an unexpected exception in one subsystem
+# (watchdog, reports, per-sensor evaluation) so it can never end the whole
+# protection loop. Logged at most once per $GuardErrorRepeatMinutes per name,
+# so a subsystem that throws on every poll does not flood the log.
+$script:GuardErrorLast    = @{}
+$GuardErrorRepeatMinutes  = 10
+
+function Write-GuardError {
+    param([string]$Name, $ErrorRecord)
+    $now  = Get-Date
+    $last = $script:GuardErrorLast[$Name]
+    if ($last -and (($now - $last).TotalMinutes -lt $GuardErrorRepeatMinutes)) { return }
+    $script:GuardErrorLast[$Name] = $now
+    $where = ""
+    try { $where = " (line $($ErrorRecord.InvocationInfo.ScriptLineNumber))" } catch { }
+    Write-Log "Subsystem '$Name' threw$where - contained, monitoring loop continues: $($ErrorRecord.Exception.Message)" "ERROR"
 }
 
 # === DEPENDENCY SCAN AND AUTO-DOWNLOAD =======================================
@@ -631,7 +677,7 @@ function Set-FirewallHardening {
                 -Direction Inbound -Action Block -Protocol TCP -LocalPort $RemoteHWInfoPort `
                 -RemoteAddress Any `
                 -ErrorAction Stop | Out-Null
-            Write-Log "Firewall        [OK] Inbound block rule created for port $RemoteHWInfoPort (non-loopback)"
+            Write-Log "Firewall        [OK] Inbound block rule created for port $RemoteHWInfoPort (blocks other devices, localhost is unaffected)"
         } else {
             Write-Log "Firewall        [OK] Block rule already present"
         }
@@ -876,7 +922,7 @@ foreach ($diagSensor in $Sensors) {
     $smDisplay = if ($diagSensor.SensorMatch -is [array]) {
         "[" + ($diagSensor.SensorMatch -join ' | ') + "]"
     } else {
-        "'$($diagSensor.SensorMatch)' (length $([string]$diagSensor.SensorMatch).Length)"
+        "'$($diagSensor.SensorMatch)' (length $(([string]$diagSensor.SensorMatch).Length))"
     }
     Write-Log "DIAG: Sensor '$($diagSensor.Name)' SensorMatch type=$smType value=$smDisplay"
 }
@@ -1071,7 +1117,9 @@ function Send-Ntfy {
     }
 }
 
-$script:LastOverThresholdKey = $null
+# '' (not $null): "nothing in alert state" is the starting point, so a first poll
+# with no hot sensor stays silent instead of announcing "back to normal".
+$script:LastOverThresholdKey = ''
 $script:TempAlertState       = @{}
 
 function Get-TempCategory {
@@ -1166,6 +1214,64 @@ function Get-AllTempsInAlertState {
     return $result | Sort-Object Category, Label
 }
 
+function Resolve-GPUSensorIndex {
+    # $script:DetectedGPUSensorIndex used to be set only by the HWiNFO fallback
+    # of GPU detection. With the normal WMI detection it stayed $null, so every
+    # "sensorIndex -eq <index>" filter (Performance Limit flags, GPU power line)
+    # never matched and, on iGPU + dGPU systems, the dedicated GPU sensors could
+    # land on the wrong device. This works the index out from the live sensor
+    # data on the first successful polls: the device that reports the profile's
+    # GPU temperature label. With several candidates the detected GPU name picks
+    # the right one. Idempotent; does nothing once an index is known.
+    param($SensorData)
+
+    if (-not $EnableGPU) { return }
+    if ($null -ne $script:DetectedGPUSensorIndex) { return }
+
+    $tempMatch  = $GPUProfiles[$GPUProfile].TempMatch
+    $candidates = @($SensorData.readings | Where-Object {
+        $_.labelOriginal -eq $tempMatch -and [string]$_.unit -match $DedicatedTempUnitPattern
+    })
+    $indexes = @($candidates | ForEach-Object { $_.sensorIndex } | Sort-Object -Unique)
+    if ($indexes.Count -eq 0) { return }
+
+    $chosen = $null
+    if ($indexes.Count -eq 1) {
+        $chosen = $indexes[0]
+    } else {
+        $name = [string]$script:DetectedGPUName
+        if ($name) {
+            foreach ($idx in $indexes) {
+                $entry = $SensorData.sensors | Where-Object { $_.entryIndex -eq $idx } | Select-Object -First 1
+                $sn    = if ($entry) { [string]$entry.sensorNameOriginal } else { "" }
+                if ($sn -and $sn.IndexOf($name, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { $chosen = $idx; break }
+            }
+        }
+        if ($null -eq $chosen) {
+            $chosen = $indexes[0]
+            Write-Log "GPU sensor index: $($indexes.Count) devices report '$tempMatch' (sensorIndex $($indexes -join ', ')) and none matches the detected GPU '$name' by name - using sensorIndex $chosen" "WARN"
+        }
+    }
+
+    $script:DetectedGPUSensorIndex = $chosen
+    foreach ($s in $Sensors) {
+        if ($s.Group -eq "GPU") { $s.PreferredSensorIndex = $chosen }
+    }
+    Write-Log "GPU sensor index: sensorIndex $chosen resolved from live sensor data ($($indexes.Count) candidate device(s))"
+}
+
+function Find-GPUReading {
+    # One reading by exact label, restricted to the GPU's own device when its
+    # sensorIndex is known (falls back to the first label match when it is not).
+    param($SensorData, [string]$Label)
+
+    $m = @($SensorData.readings | Where-Object { $_.labelOriginal -eq $Label })
+    if ($null -ne $script:DetectedGPUSensorIndex) {
+        $m = @($m | Where-Object { $_.sensorIndex -eq $script:DetectedGPUSensorIndex })
+    }
+    return ($m | Select-Object -First 1)
+}
+
 function Get-CurrentGPUPowerLine {
     param($SensorData)
 
@@ -1173,9 +1279,7 @@ function Get-CurrentGPUPowerLine {
     $powerMatch = $GPUProfiles[$GPUProfile].PowerMatch
     if (-not $powerMatch) { return $null }
 
-    $reading = $SensorData.readings | Where-Object {
-        $_.labelOriginal -eq $powerMatch -and $_.sensorIndex -eq $script:DetectedGPUSensorIndex
-    } | Select-Object -First 1
+    $reading = Find-GPUReading -SensorData $SensorData -Label $powerMatch
     if (-not $reading) { return $null }
 
     return "GPU Power: $($reading.value) W"
@@ -1216,7 +1320,12 @@ function Invoke-AllTempsReportCheck {
     if (-not $EnableAllTempsReport) { return }
 
     $alertList = Get-AllTempsInAlertState -SensorData $SensorData
-    $currentKey = ($alertList | ForEach-Object { "$($_.Label)=$($_.Value)" }) -join ';'
+    # The key is the SET of sensors in alert state, NOT their values. HWiNFO
+    # values change on nearly every poll (61.625, 61.75, ...), so a key that
+    # contained them would differ every 5 s while any sensor sits above its
+    # report threshold and queue one info line per poll, which then arrived as
+    # a digest with hundreds of lines.
+    $currentKey = ($alertList | ForEach-Object { [string]$_.Label }) -join ';'
 
     if ($currentKey -eq $script:LastOverThresholdKey) { return }
     $script:LastOverThresholdKey = $currentKey
@@ -1227,7 +1336,9 @@ function Invoke-AllTempsReportCheck {
         return
     }
 
-    $lines = $alertList | ForEach-Object { "[$($_.Category)] $($_.Label): $($_.Value) C" }
+    # @(...) on purpose: with exactly one alert the pipeline yields a plain string,
+    # and "$lines += $powerLine" below would then glue the two texts together.
+    $lines = @($alertList | ForEach-Object { "[$($_.Category)] $($_.Label): $($_.Value) C" })
     $powerLine = Get-CurrentGPUPowerLine -SensorData $SensorData
     if ($powerLine) { $lines += $powerLine }
     $body  = $lines -join "; "
@@ -1244,12 +1355,15 @@ function Invoke-PerfLimitCheck {
     if (-not $EnableGPU) { return }
 
     foreach ($flagName in $PerfLimitFlagsToWatch) {
-        $reading = $SensorData.readings | Where-Object {
-            $_.labelOriginal -eq $flagName -and $_.sensorIndex -eq $script:DetectedGPUSensorIndex
-        } | Select-Object -First 1
+        $reading = Find-GPUReading -SensorData $SensorData -Label $flagName
         if (-not $reading) { continue }
 
-        $isActive = ([double]$reading.value -eq 1)
+        # Invariant-culture parse instead of a [double] cast: an unparsable
+        # value skips this flag for the poll instead of throwing.
+        $flagValue = 0.0
+        if (-not [double]::TryParse([string]$reading.value, [System.Globalization.NumberStyles]::Float,
+                                    [System.Globalization.CultureInfo]::InvariantCulture, [ref]$flagValue)) { continue }
+        $isActive = ($flagValue -eq 1)
         $prev = $script:PerfLimitLastState[$flagName]
 
         # First poll: record the baseline silently, only alert if it starts
@@ -1505,22 +1619,45 @@ function Set-GuardTaskEnabled {
     # Disabling the task while files are swapped keeps its repetition trigger
     # from launching a half-updated guard in the middle of the swap. No-op
     # when no scheduled task exists (shell:startup setups).
+    #
+    # $script:GuardTaskDisabledByInstaller remembers that THIS process disabled
+    # it, so the installer's "finally" can put it back even when the install
+    # aborts half way (an exception between disable and enable used to leave the
+    # task disabled for good: no protection and no self-heal). A task the user
+    # had disabled themselves is never enabled by this.
     param([bool]$Enabled)
     try {
         $task = Get-ScheduledTask -TaskName $ThermalGuardTaskName -ErrorAction SilentlyContinue
         if (-not $task) { return }
-        if ($Enabled) { Enable-ScheduledTask  -TaskName $ThermalGuardTaskName -ErrorAction Stop | Out-Null }
-        else          { Disable-ScheduledTask -TaskName $ThermalGuardTaskName -ErrorAction Stop | Out-Null }
+        if ($Enabled) {
+            Enable-ScheduledTask  -TaskName $ThermalGuardTaskName -ErrorAction Stop | Out-Null
+            $script:GuardTaskDisabledByInstaller = $false
+        } else {
+            Disable-ScheduledTask -TaskName $ThermalGuardTaskName -ErrorAction Stop | Out-Null
+            $script:GuardTaskDisabledByInstaller = $true
+        }
     } catch {
         Write-Log "Update install  [WARN] Could not $(if ($Enabled) {'enable'} else {'disable'}) scheduled task '$ThermalGuardTaskName': $_" "WARN"
     }
+}
+
+$script:GuardTaskDisabledByInstaller = $false
+
+function Test-IsGuardProcess {
+    # True for a PowerShell process that runs the ThermalGuard script via -File.
+    # The process NAME is part of the test: matching on the command line alone
+    # also hit any other process that merely mentions the script name (an editor,
+    # a terminal, a monitoring tool).
+    param([string]$Name, [string]$CommandLine)
+    return ($Name -match '(?i)^(pwsh|powershell)(\.exe)?$') -and
+           ($CommandLine -match '(?i)-File\s+.*HWiNFO-ThermalGuard\.ps1')
 }
 
 function Stop-RunningGuardProcesses {
     # Stops every OTHER ThermalGuard monitoring process (never this one).
     try { Stop-ScheduledTask -TaskName $ThermalGuardTaskName -ErrorAction SilentlyContinue } catch { }
     Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -match '(?i)-File\s+.*HWiNFO-ThermalGuard\.ps1' -and $_.ProcessId -ne $PID } |
+        Where-Object { $_.ProcessId -ne $PID -and (Test-IsGuardProcess -Name $_.Name -CommandLine $_.CommandLine) } |
         ForEach-Object {
             try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch { }
         }
@@ -2017,9 +2154,15 @@ function Invoke-Shutdown {
         return
     }
     Write-Log "=== STAGE 3: EMERGENCY SHUTDOWN ===" "CRIT"
-    Send-Alert -Title "EMERGENCY SHUTDOWN" -Body "System is shutting down now." -Priority "urgent"
-    Start-Sleep -Seconds 2
-    & shutdown.exe /s /f /t 0
+    # Shutdown FIRST, alert second. The alert (toast + ntfy) is network and UI
+    # work that can hang for many seconds (DNS, blocked proxy); it used to run
+    # before the shutdown and could delay the emergency stop by that long. The
+    # short countdown gives the alert a bounded window to go out.
+    & shutdown.exe /s /f /t $EmergencyShutdownDelaySec
+    if ($LASTEXITCODE -ne 0) {
+        Write-Log "shutdown.exe returned exit code $LASTEXITCODE - the system may NOT be shutting down" "ERROR"
+    }
+    Send-Alert -Title "EMERGENCY SHUTDOWN" -Body "System is shutting down in ${EmergencyShutdownDelaySec}s." -Priority "urgent"
 }
 
 # === DATA-LOSS FAIL-SAFE =====================================================
@@ -2066,6 +2209,43 @@ function Invoke-DataLossFailsafe {
 
     if ($blindSec -ge $DataLossShutdownSec) {
         Write-Log "Data-loss fail-safe: blind for ${blindSec}s, SHUTDOWN" "CRIT"
+        Invoke-Shutdown
+        return $true
+    }
+    return $false
+}
+
+# === STAGE 2 / 3 ESCALATION FOR A RUNNING CRITICAL TIMER ======================
+# Shared by the per-sensor evaluation and by the "no data at all" path of the
+# main loop, so a critical sensor escalates the same way whether its readings
+# are still arriving or the whole endpoint has gone dark mid-escalation.
+# Returns $true when the emergency shutdown has just been triggered (the caller
+# must stop); use "-contains $true" on the result.
+
+$script:GlobalStage2Executed = $false
+
+function Invoke-CriticalEscalation {
+    param(
+        [string]$Name,
+        [string]$ValueText,
+        [hashtable]$TriggerTimestamps,
+        [hashtable]$Stage2Executed
+    )
+
+    $elapsed = [int](((Get-Date) - $TriggerTimestamps[$Name]).TotalSeconds)
+
+    if ($elapsed -ge $Stage2Delay -and -not $Stage2Executed[$Name]) {
+        Write-Log "${Name}: ${elapsed}s critical, stage 2" "CRIT"
+        Send-Alert -Title "Stage 2: processes killed" -Body "$Name at $ValueText for ${elapsed}s" -Priority "urgent"
+        if (-not $script:GlobalStage2Executed) {
+            Invoke-KillProcesses
+            $script:GlobalStage2Executed = $true
+        }
+        $Stage2Executed[$Name] = $true
+    }
+
+    if ($elapsed -ge $Stage3Delay) {
+        Write-Log "${Name}: ${elapsed}s critical, stage 3: SHUTDOWN" "CRIT"
         Invoke-Shutdown
         return $true
     }
@@ -2318,12 +2498,14 @@ function Start-ThermalGuard {
     $missingSensorLastAlert = @{}
     $endpointDown           = $false
     $lastEndpointAlert      = $null
-    $globalStage2Executed   = $false
+    $script:GlobalStage2Executed = $false
     $lastWatchdogRun        = $null
     $unhealthyCycleCount    = 0
     $selfTestPrinted        = $false
     $healthMarkerLogged     = $false
     $fanSeenSpinning        = @{}
+    $presumedLogged         = @{}
+    $lastLoopTick           = $null
 
     # Primary temperature sensors: if none of these has a valid reading the
     # guard is blind (see Invoke-DataLossFailsafe).
@@ -2332,8 +2514,27 @@ function Start-ThermalGuard {
     if ($EnableGPU) { $primaryTemps += "GPU Temperature" }
 
     while ($true) {
+        # Wall-clock timers are meaningless across a suspend/resume or a frozen
+        # process: start fresh instead of counting time nobody measured.
+        $loopTick = Get-Date
+        if ($null -ne $lastLoopTick -and (($loopTick - $lastLoopTick).TotalSeconds -gt $LoopGapResetSec)) {
+            Write-Log "Main loop gap of $([int](($loopTick - $lastLoopTick).TotalSeconds))s (suspend/resume or frozen process): Stage 2/3 timers and the data-loss counter are reset" "WARN"
+            $triggerTimestamps.Clear()
+            $stage2Executed.Clear()
+            $presumedLogged.Clear()
+            $script:GlobalStage2Executed = $false
+            $script:BlindSince      = $null
+            $script:BlindStage2Done = $false
+        }
+        $lastLoopTick = $loopTick
+
+        # Nothing in the info/maintenance subsystems may end the protection
+        # loop: each one is contained and logged (rate-limited), the sensor
+        # evaluation below still runs.
         if ($EnableWatchdog) {
-            Invoke-Watchdog -LastWatchdogRun ([ref]$lastWatchdogRun) -UnhealthyCycleCount ([ref]$unhealthyCycleCount)
+            try {
+                Invoke-Watchdog -LastWatchdogRun ([ref]$lastWatchdogRun) -UnhealthyCycleCount ([ref]$unhealthyCycleCount)
+            } catch { Write-GuardError -Name "Watchdog" -ErrorRecord $_ }
         }
 
         $sensorData = Get-HWiNFOSensors
@@ -2351,6 +2552,18 @@ function Start-ThermalGuard {
             # Blind: keep updates away and let the data-loss fail-safe count.
             $script:AnyStageCriticalActive = $true
             if ((Invoke-DataLossFailsafe -IsBlind ($primaryTemps.Count -gt 0)) -contains $true) { return }
+
+            # A critical timer that was already running when the data went dark
+            # (e.g. HWiNFO crashed because the PC is hot) must not freeze: the
+            # sensor is presumed to still be critical and keeps escalating
+            # instead of waiting for the much slower data-loss fail-safe.
+            foreach ($critName in @($triggerTimestamps.Keys)) {
+                if (-not $presumedLogged[$critName]) {
+                    Write-Log "${critName}: no sensor data at all while its critical timer is running - presuming it is still critical ($([int](((Get-Date) - $triggerTimestamps[$critName]).TotalSeconds))s so far)" "CRIT"
+                    $presumedLogged[$critName] = $true
+                }
+                if ((Invoke-CriticalEscalation -Name $critName -ValueText "no data (presumed critical)" -TriggerTimestamps $triggerTimestamps -Stage2Executed $stage2Executed) -contains $true) { return }
+            }
             Start-Sleep -Seconds $PollInterval
             continue
         }
@@ -2361,100 +2574,119 @@ function Start-ThermalGuard {
             $lastEndpointAlert = $null
         }
 
-        Invoke-AllTempsReportCheck -SensorData $sensorData
-        Invoke-PerfLimitCheck -SensorData $sensorData
-        Invoke-InfoAlertDigestFlush
+        try { Resolve-GPUSensorIndex -SensorData $sensorData } catch { Write-GuardError -Name "GPU sensor index" -ErrorRecord $_ }
+        try { Invoke-AllTempsReportCheck -SensorData $sensorData } catch { Write-GuardError -Name "All-temps report" -ErrorRecord $_ }
+        try { Invoke-PerfLimitCheck -SensorData $sensorData } catch { Write-GuardError -Name "Performance-limit check" -ErrorRecord $_ }
+        try { Invoke-InfoAlertDigestFlush } catch { Write-GuardError -Name "Info-alert digest" -ErrorRecord $_ }
 
         # Report finding #10: explicit self-test on the first successful
         # poll so an operator can verify exactly which sensor each
         # configured entry actually resolved to.
         if (-not $selfTestPrinted) {
-            Write-Log "=== Sensor self-test (first successful poll) ==="
-            foreach ($sensor in $Sensors) {
-                if ($sensor.Group -eq "CPU" -and -not $EnableCPU) { continue }
-                if ($sensor.Group -eq "GPU" -and -not $EnableGPU) { continue }
-
-                # Explicit type check, not an "is it NOT an array" inference:
-                # a genuine [string] always takes the exact single-candidate
-                # path that worked correctly pre-fallback-chains (v1.46).
-                # Only real arrays (currently just the CPU entry) go through
-                # the multi-candidate loop below. This was rewritten after a
-                # production incident where GPU sensors (plain strings) got
-                # corrupted into a single stray character ('G') somewhere in
-                # the array-normalization path - the exact mechanism was
-                # never fully confirmed even after extensive review, so
-                # rather than patch a suspect line, the string case now
-                # bypasses that code path entirely.
-                if ($sensor.SensorMatch -is [string]) {
-                    $singleMatch = $sensor.SensorMatch
-                    $candidates = $sensorData.readings | Where-Object {
-                        $_.labelOriginal -eq $singleMatch -or $_.labelUser -eq $singleMatch -or
-                        $_.labelOriginal -like "*$singleMatch*" -or $_.labelUser -like "*$singleMatch*"
-                    }
-                    if ($candidates.Count -gt 1 -and $sensor.PreferredSensorIndex) {
-                        $byIndex = $candidates | Where-Object { $_.sensorIndex -eq $sensor.PreferredSensorIndex }
-                        if ($byIndex) { $candidates = $byIndex }
-                    }
-                    if ($candidates.Count -gt 1 -and $sensor.Type -eq "fan") {
-                        $byUnit = $candidates | Where-Object { [string]$_.unit -eq "RPM" }
-                        if ($byUnit) { $candidates = $byUnit }
-                    }
-                    $reading = $candidates | Select-Object -First 1
-                    if ($reading) {
-                        Write-Log "  $($sensor.Name) -> labelOriginal='$($reading.labelOriginal)' sensorIndex=$($reading.sensorIndex) readingId=$($reading.readingId) unit=$($reading.unit) value=$($reading.value)"
-                    } else {
-                        Write-Log "  $($sensor.Name) -> NO MATCH for '$singleMatch'$(if ($sensor.Optional) {' (optional sensor)'})" $(if ($sensor.Optional) { "INFO" } else { "WARN" })
-                    }
-                    continue
-                }
-
-                $matchCandidates = $sensor.SensorMatch
-                $reading = $null
-                $matchedCandidate = $null
-                foreach ($candidate in $matchCandidates) {
-                    $candidates = $sensorData.readings | Where-Object {
-                        $_.labelOriginal -eq $candidate -or $_.labelUser -eq $candidate -or
-                        $_.labelOriginal -like "*$candidate*" -or $_.labelUser -like "*$candidate*"
-                    }
-                    # Mirror Find-SensorValue's disambiguation order so the self-test
-                    # log shows exactly the reading that will actually be monitored,
-                    # not just whichever one happened to come first in the JSON.
-                    if ($candidates.Count -gt 1 -and $sensor.PreferredSensorIndex) {
-                        $byIndex = $candidates | Where-Object { $_.sensorIndex -eq $sensor.PreferredSensorIndex }
-                        if ($byIndex) { $candidates = $byIndex }
-                    }
-                    if ($candidates.Count -gt 1 -and $sensor.Type -eq "fan") {
-                        $byUnit = $candidates | Where-Object { [string]$_.unit -eq "RPM" }
-                        if ($byUnit) { $candidates = $byUnit }
-                    }
-                    $reading = $candidates | Select-Object -First 1
-                    if ($reading) { $matchedCandidate = $candidate; break }
-                }
-                if ($reading) {
-                    $fallbackNote = if ($matchedCandidate -ne $matchCandidates[0]) { " (fallback: primary '$($matchCandidates[0])' not found)" } else { "" }
-                    Write-Log "  $($sensor.Name) -> labelOriginal='$($reading.labelOriginal)' sensorIndex=$($reading.sensorIndex) readingId=$($reading.readingId) unit=$($reading.unit) value=$($reading.value)$fallbackNote"
-                } else {
-                    $matchDisplay = $matchCandidates -join "' / '"
-                    Write-Log "  $($sensor.Name) -> NO MATCH for '$matchDisplay'$(if ($sensor.Optional) {' (optional sensor)'})" $(if ($sensor.Optional) { "INFO" } else { "WARN" })
-                }
-            }
-            # The lines above only show which readings match by label. This shows
-            # whether the REAL lookup (incl. index/unit filters) resolves them.
-            foreach ($sensor in $Sensors) {
-                if ($sensor.Group -eq "CPU" -and -not $EnableCPU) { continue }
-                if ($sensor.Group -eq "GPU" -and -not $EnableGPU) { continue }
-                $stUnitHint    = if ($sensor.Type -eq "fan")  { "RPM" } else { $null }
-                $stUnitPattern = if ($sensor.Type -eq "temp") { $DedicatedTempUnitPattern } else { $null }
-                $stValue = Find-SensorValue -SensorData $sensorData -Match $sensor.SensorMatch -PreferredSensorIndex $sensor.PreferredSensorIndex -PreferredUnit $stUnitHint -SensorDisplayName $sensor.Name -RequiredUnitPattern $stUnitPattern
-                if ($null -eq $stValue) {
-                    Write-Log "  $($sensor.Name) -> NOT resolved by the live lookup$(if ($sensor.Optional) {' (optional sensor)'})" $(if ($sensor.Optional) { "INFO" } else { "WARN" })
-                }
-            }
-            Write-Log "=== End self-test ==="
+            # Marked done up front: a self-test that throws must not repeat on every poll.
             $selfTestPrinted = $true
+            try {
+                Write-Log "=== Sensor self-test (first successful poll) ==="
+                foreach ($sensor in $Sensors) {
+                    if ($sensor.Group -eq "CPU" -and -not $EnableCPU) { continue }
+                    if ($sensor.Group -eq "GPU" -and -not $EnableGPU) { continue }
+
+                    # Explicit type check, not an "is it NOT an array" inference:
+                    # a genuine [string] always takes the exact single-candidate
+                    # path that worked correctly pre-fallback-chains (v1.46).
+                    # Only real arrays (currently just the CPU entry) go through
+                    # the multi-candidate loop below. This was rewritten after a
+                    # production incident where GPU sensors (plain strings) got
+                    # corrupted into a single stray character ('G') somewhere in
+                    # the array-normalization path - the exact mechanism was
+                    # never fully confirmed even after extensive review, so
+                    # rather than patch a suspect line, the string case now
+                    # bypasses that code path entirely.
+                    if ($sensor.SensorMatch -is [string]) {
+                        $singleMatch = $sensor.SensorMatch
+                        $candidates = $sensorData.readings | Where-Object {
+                            $_.labelOriginal -eq $singleMatch -or $_.labelUser -eq $singleMatch -or
+                            $_.labelOriginal -like "*$singleMatch*" -or $_.labelUser -like "*$singleMatch*"
+                        }
+                        if ($candidates.Count -gt 1 -and $sensor.PreferredSensorIndex) {
+                            $byIndex = $candidates | Where-Object { $_.sensorIndex -eq $sensor.PreferredSensorIndex }
+                            if ($byIndex) { $candidates = $byIndex }
+                        }
+                        if ($candidates.Count -gt 1 -and $sensor.Type -eq "fan") {
+                            $byUnit = $candidates | Where-Object { [string]$_.unit -eq "RPM" }
+                            if ($byUnit) { $candidates = $byUnit }
+                        }
+                        $reading = $candidates | Select-Object -First 1
+                        if ($reading) {
+                            Write-Log "  $($sensor.Name) -> labelOriginal='$($reading.labelOriginal)' sensorIndex=$($reading.sensorIndex) readingId=$($reading.readingId) unit=$($reading.unit) value=$($reading.value)"
+                        } else {
+                            Write-Log "  $($sensor.Name) -> NO MATCH for '$singleMatch'$(if ($sensor.Optional) {' (optional sensor)'})" $(if ($sensor.Optional) { "INFO" } else { "WARN" })
+                        }
+                        continue
+                    }
+
+                    $matchCandidates = $sensor.SensorMatch
+                    $reading = $null
+                    $matchedCandidate = $null
+                    foreach ($candidate in $matchCandidates) {
+                        $candidates = $sensorData.readings | Where-Object {
+                            $_.labelOriginal -eq $candidate -or $_.labelUser -eq $candidate -or
+                            $_.labelOriginal -like "*$candidate*" -or $_.labelUser -like "*$candidate*"
+                        }
+                        # Mirror Find-SensorValue's disambiguation order so the self-test
+                        # log shows exactly the reading that will actually be monitored,
+                        # not just whichever one happened to come first in the JSON.
+                        if ($candidates.Count -gt 1 -and $sensor.PreferredSensorIndex) {
+                            $byIndex = $candidates | Where-Object { $_.sensorIndex -eq $sensor.PreferredSensorIndex }
+                            if ($byIndex) { $candidates = $byIndex }
+                        }
+                        if ($candidates.Count -gt 1 -and $sensor.Type -eq "fan") {
+                            $byUnit = $candidates | Where-Object { [string]$_.unit -eq "RPM" }
+                            if ($byUnit) { $candidates = $byUnit }
+                        }
+                        $reading = $candidates | Select-Object -First 1
+                        if ($reading) { $matchedCandidate = $candidate; break }
+                    }
+                    if ($reading) {
+                        $fallbackNote = if ($matchedCandidate -ne $matchCandidates[0]) { " (fallback: primary '$($matchCandidates[0])' not found)" } else { "" }
+                        Write-Log "  $($sensor.Name) -> labelOriginal='$($reading.labelOriginal)' sensorIndex=$($reading.sensorIndex) readingId=$($reading.readingId) unit=$($reading.unit) value=$($reading.value)$fallbackNote"
+                    } else {
+                        $matchDisplay = $matchCandidates -join "' / '"
+                        Write-Log "  $($sensor.Name) -> NO MATCH for '$matchDisplay'$(if ($sensor.Optional) {' (optional sensor)'})" $(if ($sensor.Optional) { "INFO" } else { "WARN" })
+                    }
+                }
+                # The lines above only show which readings match by label. This shows
+                # whether the REAL lookup (incl. index/unit filters) resolves them.
+                foreach ($sensor in $Sensors) {
+                    if ($sensor.Group -eq "CPU" -and -not $EnableCPU) { continue }
+                    if ($sensor.Group -eq "GPU" -and -not $EnableGPU) { continue }
+                    $stUnitHint    = if ($sensor.Type -eq "fan")  { "RPM" } else { $null }
+                    $stUnitPattern = if ($sensor.Type -eq "temp") { $DedicatedTempUnitPattern } else { $null }
+                    $stValue = Find-SensorValue -SensorData $sensorData -Match $sensor.SensorMatch -PreferredSensorIndex $sensor.PreferredSensorIndex -PreferredUnit $stUnitHint -SensorDisplayName $sensor.Name -RequiredUnitPattern $stUnitPattern
+                    if ($null -eq $stValue) {
+                        Write-Log "  $($sensor.Name) -> NOT resolved by the live lookup$(if ($sensor.Optional) {' (optional sensor)'})" $(if ($sensor.Optional) { "INFO" } else { "WARN" })
+                    }
+                }
+                Write-Log "=== End self-test ==="
+            } catch { Write-GuardError -Name "Sensor self-test" -ErrorRecord $_ }
         }
 
-        $gpuLoad = if ($EnableGPU) { Find-GPULoad -SensorData $sensorData } else { $null }
+        $gpuLoad = $null
+        if ($EnableGPU) {
+            try { $gpuLoad = Find-GPULoad -SensorData $sensorData } catch { Write-GuardError -Name "GPU load lookup" -ErrorRecord $_ }
+        }
+
+        # GPU temperature for the fan evaluation: a stopped fan only counts once
+        # the GPU is warm (see $GPU_FanStopMinTempC). Same lookup, unit filter and
+        # plausibility bounds as the dedicated "GPU Temperature" sensor.
+        $gpuTemp = $null
+        if ($EnableGPU) {
+            try {
+                $gpuTemp = Find-SensorValue -SensorData $sensorData -Match $GPUProfiles[$GPUProfile].TempMatch -PreferredSensorIndex $script:DetectedGPUSensorIndex -SensorDisplayName "GPU Temperature" -RequiredUnitPattern $DedicatedTempUnitPattern
+            } catch { Write-GuardError -Name "GPU temperature lookup" -ErrorRecord $_ }
+            if ($null -ne $gpuTemp -and ($gpuTemp -lt $TempSanityMinC -or $gpuTemp -gt $TempSanityMaxC)) { $gpuTemp = $null }
+        }
+        $gpuWarm = ($null -ne $gpuTemp -and $gpuTemp -ge $GPU_FanStopMinTempC)
 
         $tempOk = @{}
 
@@ -2463,130 +2695,156 @@ function Start-ThermalGuard {
             if ($sensor.Group -eq "GPU" -and -not $EnableGPU) { continue }
 
             $sName = $sensor.Name
-            $unitHint    = if ($sensor.Type -eq "fan")  { "RPM" } else { $null }
-            $unitPattern = if ($sensor.Type -eq "temp") { $DedicatedTempUnitPattern } else { $null }
-            $value = Find-SensorValue -SensorData $sensorData -Match $sensor.SensorMatch -PreferredSensorIndex $sensor.PreferredSensorIndex -PreferredUnit $unitHint -SensorDisplayName $sName -RequiredUnitPattern $unitPattern
 
-            # -SimulateTemp: pretend the CPU temperature (implies -DryRun).
-            if (-not [double]::IsNaN($SimulateTemp) -and $sName -eq "CPU Tctl/Tdie") { $value = $SimulateTemp }
+            # One sensor's evaluation throwing must neither end the monitoring
+            # loop nor stop the other sensors from being evaluated. A sensor that
+            # cannot be evaluated is not a valid reading: it is removed from
+            # $tempOk, so for the primary CPU/GPU temperatures the data-loss
+            # fail-safe counts it as blind.
+            try {
+                $unitHint    = if ($sensor.Type -eq "fan")  { "RPM" } else { $null }
+                $unitPattern = if ($sensor.Type -eq "temp") { $DedicatedTempUnitPattern } else { $null }
+                $value = Find-SensorValue -SensorData $sensorData -Match $sensor.SensorMatch -PreferredSensorIndex $sensor.PreferredSensorIndex -PreferredUnit $unitHint -SensorDisplayName $sName -RequiredUnitPattern $unitPattern
 
-            if ($null -eq $value) {
-                # Optional sensors (e.g. GPU Fan 2) may legitimately not exist.
-                if ($sensor.Optional) { continue }
-                $missingSensorCounts[$sName] = [int]$missingSensorCounts[$sName] + 1
-                if ($missingSensorCounts[$sName] -ge $MissingSensorAlertAfterPolls) {
-                    $lastMissingAlert = $missingSensorLastAlert[$sName]
-                    if (($null -eq $lastMissingAlert) -or (((Get-Date) - $lastMissingAlert).TotalMinutes -ge $MissingSensorAlertIntervalMinutes)) {
-                        $matchDisplay = if ($sensor.SensorMatch -is [array]) { $sensor.SensorMatch -join "' / '" } else { $sensor.SensorMatch }
-                        Write-Log "Sensor missing: $sName ('$matchDisplay')" "ERROR"
-                        Send-Alert -Title "Sensor missing" -Body "$sName not found" -Priority "urgent"
-                        $missingSensorLastAlert[$sName] = Get-Date
+                # -SimulateTemp: pretend the CPU temperature (implies -DryRun).
+                if (-not [double]::IsNaN($SimulateTemp) -and $sName -eq "CPU Tctl/Tdie") { $value = $SimulateTemp }
+
+                if ($null -eq $value) {
+                    # Optional sensors (e.g. GPU Fan 2) may legitimately not exist.
+                    if (-not $sensor.Optional) {
+                        $missingSensorCounts[$sName] = [int]$missingSensorCounts[$sName] + 1
+                        if ($missingSensorCounts[$sName] -ge $MissingSensorAlertAfterPolls) {
+                            $lastMissingAlert = $missingSensorLastAlert[$sName]
+                            if (($null -eq $lastMissingAlert) -or (((Get-Date) - $lastMissingAlert).TotalMinutes -ge $MissingSensorAlertIntervalMinutes)) {
+                                $matchDisplay = if ($sensor.SensorMatch -is [array]) { $sensor.SensorMatch -join "' / '" } else { $sensor.SensorMatch }
+                                Write-Log "Sensor missing: $sName ('$matchDisplay')" "ERROR"
+                                Send-Alert -Title "Sensor missing" -Body "$sName not found" -Priority "urgent"
+                                $missingSensorLastAlert[$sName] = Get-Date
+                            }
+                        }
                     }
                 }
-                continue
-            }
-
-            if ($missingSensorCounts.ContainsKey($sName)) {
-                if ($missingSensorCounts[$sName] -ge $MissingSensorAlertAfterPolls) {
-                    Write-Log "$sName found again: $value"
+                elseif ($sensor.Type -eq "temp" -and ($value -lt $TempSanityMinC -or $value -gt $TempSanityMaxC)) {
+                    # SAFETY NET: refuse to treat an implausible value as a real
+                    # temperature, regardless of how it got here. A correctly
+                    # functioning sensor never reports below -20 C or above 150 C;
+                    # if this ever fires, something upstream misidentified a reading
+                    # (confirmed once in production: a RAM/memory value in MB got
+                    # compared against a Crit threshold as if it were degrees C,
+                    # triggering a false emergency shutdown at ~45 C real GPU temp).
+                    if (-not $script:LoggedImplausibleTemp[$sName]) {
+                        Write-Log "${sName}: IMPLAUSIBLE value $value degrees (outside $TempSanityMinC..$TempSanityMaxC C) - treating as a bad reading, NOT evaluating Warn/Crit this poll" "ERROR"
+                        Send-Alert -Title "Sensor data implausible: $sName" -Body "Got $value degrees, which is outside any real range. Ignoring this reading rather than risk a false shutdown." -Priority "urgent"
+                        $script:LoggedImplausibleTemp[$sName] = $true
+                    }
+                    $value = $null
                 }
-                $missingSensorCounts.Remove($sName)
-                $missingSensorLastAlert.Remove($sName)
-            }
-
-            $isCritical = $false
-
-            # SAFETY NET: refuse to treat an implausible value as a real
-            # temperature, regardless of how it got here. A correctly
-            # functioning sensor never reports below -20 C or above 150 C;
-            # if this ever fires, something upstream misidentified a reading
-            # (confirmed once in production: a RAM/memory value in MB got
-            # compared against a Crit threshold as if it were degrees C,
-            # triggering a false emergency shutdown at ~45 C real GPU temp).
-            if ($sensor.Type -eq "temp" -and ($value -lt $TempSanityMinC -or $value -gt $TempSanityMaxC)) {
-                if (-not $script:LoggedImplausibleTemp[$sName]) {
-                    Write-Log "${sName}: IMPLAUSIBLE value $value degrees (outside $TempSanityMinC..$TempSanityMaxC C) - treating as a bad reading, NOT evaluating Warn/Crit this poll" "ERROR"
-                    Send-Alert -Title "Sensor data implausible: $sName" -Body "Got $value degrees, which is outside any real range. Ignoring this reading rather than risk a false shutdown." -Priority "urgent"
-                    $script:LoggedImplausibleTemp[$sName] = $true
+                else {
+                    if ($missingSensorCounts.ContainsKey($sName)) {
+                        if ($missingSensorCounts[$sName] -ge $MissingSensorAlertAfterPolls) {
+                            Write-Log "$sName found again: $value"
+                        }
+                        $missingSensorCounts.Remove($sName)
+                        $missingSensorLastAlert.Remove($sName)
+                    }
+                    $script:LoggedImplausibleTemp.Remove($sName)
+                    if ($sensor.Type -eq "temp") { $tempOk[$sName] = $true }
                 }
-                continue
-            }
-            $script:LoggedImplausibleTemp.Remove($sName)
-            if ($sensor.Type -eq "temp") { $tempOk[$sName] = $true }
 
-            # Armed-after-spinning for optional fans: a 0 RPM reading that has
-            # never been above 0 in this run is a phantom sensor, not a dead fan.
-            if ($sensor.Optional -and $sensor.Type -eq "fan") {
-                if ($value -gt 0) { $fanSeenSpinning[$sName] = $true }
-                if (-not $fanSeenSpinning[$sName]) { continue }
-            }
-
-            if ($sensor.Type -eq "temp") {
-                if ($value -ge $sensor.WarnThreshold -and -not $warnSent[$sName]) {
-                    Write-Log "${sName}: WARNING ${value} degrees (threshold: $($sensor.WarnThreshold))" "WARN"
-                    # Warn is informational only - Crit detection below reads
-                    # $value directly, not this flag, so queuing this instead
-                    # of sending immediately does not delay the Stage2/Stage3
-                    # kill/shutdown escalation in any way.
-                    Queue-InfoAlert -Line "$sName warning: ${value} degrees reached (threshold: $($sensor.WarnThreshold))"
-                    $warnSent[$sName] = $true
+                # No usable reading (missing or implausible). A sensor with no
+                # running critical timer is simply skipped this poll. One that is
+                # ALREADY inside its Stage 2/3 timer is presumed to still be
+                # critical: going dark mid-escalation must neither freeze the
+                # timer (the sensor would then escape Stage 3 for as long as it
+                # stays unreadable) nor leave a stale timer that fires instantly
+                # the moment the sensor comes back.
+                $presumedCritical = $false
+                if ($null -eq $value) {
+                    if ($triggerTimestamps[$sName]) { $presumedCritical = $true } else { continue }
                 }
-                $isCritical = ($value -ge $sensor.CritThreshold)
-            }
-            elseif ($sensor.Type -eq "fan") {
-                if ($null -ne $gpuLoad -and $gpuLoad -ge $GPULoadThreshold) {
-                    if ($value -le $sensor.WarnThreshold -and $value -gt $sensor.CritThreshold -and -not $warnSent[$sName]) {
-                        Write-Log "${sName}: WARNING ${value} RPM at ${gpuLoad}% load" "WARN"
-                        # Same reasoning as the temp warn above: purely
-                        # informational, Crit detection is independent of it.
-                        Queue-InfoAlert -Line "$sName warning: ${value} RPM at ${gpuLoad}% load"
+
+                $isCritical = $false
+
+                if ($presumedCritical) {
+                    $isCritical = $true
+                    if (-not $presumedLogged[$sName]) {
+                        Write-Log "${sName}: no valid reading while its critical timer is running - presuming it is still critical ($([int](((Get-Date) - $triggerTimestamps[$sName]).TotalSeconds))s so far)" "CRIT"
+                        $presumedLogged[$sName] = $true
+                    }
+                }
+                else {
+                    $presumedLogged.Remove($sName)
+
+                    # Armed-after-spinning for optional fans: a 0 RPM reading that has
+                    # never been above 0 in this run is a phantom sensor, not a dead fan.
+                    if ($sensor.Optional -and $sensor.Type -eq "fan") {
+                        if ($value -gt 0) { $fanSeenSpinning[$sName] = $true }
+                        if (-not $fanSeenSpinning[$sName]) { continue }
+                    }
+
+                    if ($sensor.Type -eq "temp") {
+                        if ($value -ge $sensor.WarnThreshold -and -not $warnSent[$sName]) {
+                            Write-Log "${sName}: WARNING ${value} degrees (threshold: $($sensor.WarnThreshold))" "WARN"
+                            # Warn is informational only - Crit detection below reads
+                            # $value directly, not this flag, so queuing this instead
+                            # of sending immediately does not delay the Stage2/Stage3
+                            # kill/shutdown escalation in any way.
+                            Queue-InfoAlert -Line "$sName warning: ${value} degrees reached (threshold: $($sensor.WarnThreshold))"
+                            $warnSent[$sName] = $true
+                        }
+                        $isCritical = ($value -ge $sensor.CritThreshold)
+                        # Inside the hysteresis band a running timer keeps running.
+                        if (-not $isCritical -and $triggerTimestamps[$sName] -and $value -ge ($sensor.CritThreshold - $CritResetHysteresisC)) {
+                            $isCritical = $true
+                        }
+                    }
+                    elseif ($sensor.Type -eq "fan") {
+                        # Needs load AND a warm GPU: cards with a zero-RPM mode stop
+                        # their fans on purpose when cool, even at 50% load.
+                        if ($null -ne $gpuLoad -and $gpuLoad -ge $GPULoadThreshold -and $gpuWarm) {
+                            if ($value -le $sensor.WarnThreshold -and $value -gt $sensor.CritThreshold -and -not $warnSent[$sName]) {
+                                Write-Log "${sName}: WARNING ${value} RPM at ${gpuLoad}% load" "WARN"
+                                # Same reasoning as the temp warn above: purely
+                                # informational, Crit detection is independent of it.
+                                Queue-InfoAlert -Line "$sName warning: ${value} RPM at ${gpuLoad}% load"
+                                $warnSent[$sName] = $true
+                            }
+                            $isCritical = ($value -le $sensor.CritThreshold)
+                        }
+                    }
+                }
+
+                $valueText = if ($presumedCritical) { "no reading (presumed critical)" } else { "$value" }
+
+                if ($isCritical) {
+                    if (-not $triggerTimestamps[$sName]) {
+                        $triggerTimestamps[$sName] = Get-Date
+                        Write-Log "${sName}: CRITICAL value=$value, timer started" "CRIT"
+                        Send-Alert -Title "$sName CRITICAL" -Body "Value: $value, shutdown in ${Stage3Delay}s if sustained" -Priority "urgent"
                         $warnSent[$sName] = $true
                     }
-                    $isCritical = ($value -le $sensor.CritThreshold)
+
+                    if ((Invoke-CriticalEscalation -Name $sName -ValueText $valueText -TriggerTimestamps $triggerTimestamps -Stage2Executed $stage2Executed) -contains $true) { return }
                 }
-            }
-
-            if ($isCritical) {
-                if (-not $triggerTimestamps[$sName]) {
-                    $triggerTimestamps[$sName] = Get-Date
-                    Write-Log "${sName}: CRITICAL value=$value, timer started" "CRIT"
-                    Send-Alert -Title "$sName CRITICAL" -Body "Value: $value, shutdown in ${Stage3Delay}s if sustained" -Priority "urgent"
-                    $warnSent[$sName] = $true
-                }
-
-                $elapsed = [int](((Get-Date) - $triggerTimestamps[$sName]).TotalSeconds)
-
-                if ($elapsed -ge $Stage2Delay -and -not $stage2Executed[$sName]) {
-                    Write-Log "${sName}: ${elapsed}s critical, stage 2" "CRIT"
-                    Send-Alert -Title "Stage 2: processes killed" -Body "$sName at $value for ${elapsed}s" -Priority "urgent"
-                    if (-not $globalStage2Executed) {
-                        Invoke-KillProcesses
-                        $globalStage2Executed = $true
+                else {
+                    if ($triggerTimestamps[$sName]) {
+                        Write-Log "${sName}: value normalized ($value), timer reset"
+                        $triggerTimestamps.Remove($sName)
+                        $stage2Executed.Remove($sName)
+                        if ($triggerTimestamps.Count -eq 0) { $script:GlobalStage2Executed = $false }
                     }
-                    $stage2Executed[$sName] = $true
-                }
-
-                if ($elapsed -ge $Stage3Delay) {
-                    Write-Log "${sName}: ${elapsed}s critical, stage 3: SHUTDOWN" "CRIT"
-                    Invoke-Shutdown
-                    return
-                }
-            }
-            else {
-                if ($triggerTimestamps[$sName]) {
-                    Write-Log "${sName}: value normalized ($value), timer reset"
-                    $triggerTimestamps.Remove($sName)
-                    $stage2Executed.Remove($sName)
-                    if ($triggerTimestamps.Count -eq 0) { $globalStage2Executed = $false }
-                }
-                if ($sensor.Type -eq "temp" -and $value -lt ($sensor.WarnThreshold * 0.95)) {
-                    $warnSent.Remove($sName)
-                }
-                elseif ($sensor.Type -eq "fan") {
-                    if (($null -eq $gpuLoad) -or ($gpuLoad -lt $GPULoadThreshold) -or ($value -ge ($sensor.WarnThreshold + 50))) {
+                    if ($sensor.Type -eq "temp" -and $value -lt ($sensor.WarnThreshold * 0.95)) {
                         $warnSent.Remove($sName)
                     }
+                    elseif ($sensor.Type -eq "fan") {
+                        if (($null -eq $gpuLoad) -or ($gpuLoad -lt $GPULoadThreshold) -or (-not $gpuWarm) -or ($value -ge ($sensor.WarnThreshold + 50))) {
+                            $warnSent.Remove($sName)
+                        }
+                    }
                 }
+            } catch {
+                Write-GuardError -Name "Sensor $sName" -ErrorRecord $_
+                $tempOk.Remove($sName)
             }
         }
 
@@ -2627,8 +2885,51 @@ if ($InstallPendingUpdate) {
         Install-ThermalGuardUpdate
     } catch {
         Write-Log "Update install  [FATAL] Installer itself crashed: $_" "ERROR"
+    } finally {
+        # Whatever happened above (success, early return, exception between the
+        # disable and the enable): never leave the guard's scheduled task
+        # disabled by us. A disabled task means no protection and no self-heal.
+        if ($script:GuardTaskDisabledByInstaller) {
+            Write-Log "Update install  Re-enabling the scheduled task that this installer disabled" "WARN"
+            Set-GuardTaskEnabled -Enabled $true
+        }
     }
     exit 0
+}
+
+# Single instance: two guards would restart each other's HWiNFO/RemoteHWInfo and
+# double every alert. Only the real monitoring mode takes part; -DryRun /
+# -SimulateTemp (which never touch anything) and the installer are exempt.
+function Enter-SingleInstance {
+    $created = $false
+    try {
+        $script:InstanceMutex = New-Object System.Threading.Mutex($true, $InstanceMutexName, [ref]$created)
+    } catch {
+        $inner = $_.Exception
+        if ($inner -isnot [System.UnauthorizedAccessException] -and $inner.InnerException) { $inner = $inner.InnerException }
+        if ($inner -is [System.UnauthorizedAccessException]) {
+            # The mutex exists but belongs to an elevated guard this process may not open.
+            return $false
+        }
+        Write-Log "Single-instance check failed ($($_.Exception.Message)) - continuing without it" "WARN"
+        return $true
+    }
+    if ($created) { return $true }
+    # It exists: held by a live guard, or abandoned by a dead one whose handle
+    # another process kept alive. Taking it over succeeds only in the second case.
+    try {
+        if ($script:InstanceMutex.WaitOne(0)) { return $true }
+    } catch [System.Threading.AbandonedMutexException] {
+        return $true
+    }
+    return $false
+}
+
+if (-not $DryRun) {
+    if (-not (Enter-SingleInstance)) {
+        Write-Log "Another ThermalGuard instance is already running (mutex '$InstanceMutexName'). This instance exits." "WARN"
+        exit 0
+    }
 }
 
 try {
@@ -2641,4 +2942,9 @@ try {
     if (-not (Test-Path $crashLog)) { New-Item -ItemType Directory -Path $crashLog -Force | Out-Null }
     Add-Content -Path (Join-Path $crashLog "thermalguard.log") -Value $crashMsg -Encoding UTF8
     throw
+} finally {
+    if ($script:InstanceMutex) {
+        try { $script:InstanceMutex.ReleaseMutex() } catch { }
+        try { $script:InstanceMutex.Dispose() } catch { }
+    }
 }
