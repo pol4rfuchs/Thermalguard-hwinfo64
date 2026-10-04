@@ -291,7 +291,10 @@ $GPU_HotspotWarn = 95     # GPU Hotspot Vorwarnung (nur AMD)
 $GPU_HotspotCrit = 100    # GPU Hotspot Hard-Stop (nur AMD)
 $GPU_FanWarnRPM  = 300    # Fan-Warnung unter diesem Wert bei Last
 $GPU_FanCritRPM  = 0      # Fan Hard-Stop: 0 RPM bei Last
+$GPU_FanStopMinTempC = 60 # Lüfter-Warnung/Hard-Stop zählen erst ab dieser GPU-Temperatur
 ```
+
+Der Lüfter-Hard-Stop braucht **Last (≥ `$GPULoadThreshold`) und** eine GPU-Temperatur ab `$GPU_FanStopMinTempC`. Karten mit Zero-RPM-Modus (z.B. RTX 50, RX 6000/7000) stoppen ihre Lüfter bei kühler GPU absichtlich, auch bei mittlerer Last; das ist kein Defekt und löst weder Warnung noch Stufe 2/3 aus.
 
 > **Wichtig:** Auch mit Weg A ersetzt das Script keine eigene Recherche —
 > `$CPU_Tjmax` (Datenblatt der CPU) und `$GPU_MaxTempSpec` (Hersteller-Spec-
@@ -325,6 +328,7 @@ $DataLossShutdownSec    = 420   # nach 7 min blind: Notabschaltung (wie Stufe 3)
 - Die normalen Alarme ("data source offline", "Sensor missing") kommen weiterhin lange vorher.
 - **Nach einem Hardwaretausch:** Sensor-Labels im Self-Test-Log prüfen (siehe [Sensor-Labels prüfen](#sensor-labels-prüfen-bei-problemen)). Passt das Label nicht, wäre der Guard blind und der Failsafe fährt nach 7 Minuten herunter. Während eines Tauschs wie bisher `$EnableGPU = $false` setzen.
 - Abschalten: `$EnableDataLossFailsafe = $false` (altes Verhalten: nur Alarm).
+- **Boot-Loop-Schutz:** Findet der Guard dauerhaft keinen gültigen CPU/GPU-Wert (Label passt nicht mehr, Intel-CPU), würde der Failsafe den PC sonst nach jedem Login erneut nach 7 Minuten herunterfahren. Jeder Failsafe-Shutdown wird deshalb in `%USERPROFILE%\HWiNFO-ThermalGuard\failsafe-shutdowns.txt` vermerkt. Gab es `$FailsafeMaxConsecutiveShutdowns` (2) davon innerhalb von `$FailsafeLoopWindowMinutes` (60) ohne dazwischen einen einzigen gesunden Poll, fährt der Guard bei Datenverlust **nicht mehr herunter**, sondern alarmiert dringend (alle 15 Minuten) und loggt `shutdown SUPPRESSED`. Der PC ist dann ungeschützt, bis die Sensordaten repariert sind. Stufe 2 (Prozessliste) bleibt aktiv. Der erste gesunde Poll löscht den Vermerk. Abschalten: `$FailsafeMaxConsecutiveShutdowns = 0`.
 
 ### Prozessliste (Stufe 2)
 
@@ -424,7 +428,7 @@ Gescannt wird nur eine feste Liste von Ordnern (jeweils inklusive Unterordnern b
 2. `C:\Tools\RemoteHWInfo\`
 3. `C:\Tools\` (inkl. Unterordner, findet z.B. `C:\Tools\RemoteHWInfo_v0.5\`)
 4. System-PATH
-5. Auto-Download von GitHub → `C:\Tools\RemoteHWInfo\` (der SHA-256 des Downloads wird nur geloggt, nicht gegen einen festen Wert geprüft: gegen die Release-Seite abgleichen)
+5. Auto-Download von GitHub → `C:\Tools\RemoteHWInfo\` (der Download ist auf einen festen SHA-256 gepinnt, `$RemoteHWInfoZipSha256`; eine abweichende Datei wird nicht entpackt)
 
 ### fipha (nur mit `$EnableFipha = $true`)
 
@@ -459,7 +463,7 @@ Wird fipha nicht gefunden, gibt es nur eine Warnung im Log.
 │  t=90s    STUFE 3 — Notabschaltung                                  │
 │           ├── Alert: "NOTABSCHALTUNG"                               │
 │           ├── 2s warten (damit ntfy noch rausgeht)                  │
-│           └── shutdown.exe /s /f /t 0                               │
+│           └── shutdown.exe /s /f /t 10                              │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -502,11 +506,47 @@ pwsh -File .\HWiNFO-ThermalGuard.ps1 -DryRun
 - Watchdog, Update-Check und Update-Installer sind in diesem Modus aus. Die Instanz zählt für den Launcher nicht als "ThermalGuard läuft" und kann parallel zur echten laufen. Sie schreibt in dasselbe Log (Zeilen mit `[DRYRUN]`).
 - Das Failsafe bei Datenverlust nutzt dieselben Aktionen und wird damit ebenfalls nur geloggt.
 
+### Automatische Verhaltenstests
+
+`tests/Run-Tests.ps1` startet das echte Script als Kindprozess gegen einen Mock-Sensor-Endpoint (`tests/MockEndpoint.ps1`, Daten aus `tests/fixtures/sensors.json`) und prüft das Log, z.B. "Lüfter stehen bei kühler GPU: kein Alarm", "kritischer Sensor verschwindet: Eskalation läuft weiter", "Exception in einem Teilsystem: Schutz läuft weiter".
+
+```powershell
+pwsh -File .\tests\Run-Tests.ps1                  # alle Szenarien (ca. 5 Minuten)
+pwsh -File .\tests\Run-Tests.ps1 -Only 'fan-*'    # eine Auswahl
+```
+
+Das Script wird dafür in einen Temp-Ordner kopiert und dort angepasst (anderer Port und Log-Ordner, kurze Stufen-Zeiten, Toasts, Kill-Liste und `shutdown.exe` nur als Stubs). An der echten Installation ändert sich nichts. Exit-Code = Anzahl fehlgeschlagener Szenarien. In GitHub Actions läuft das als Workflow *Behavior Tests*.
+
 ---
 
 ## Firewall-Härtung
 
-RemoteHWInfo ist ein allgemeiner HTTP/JSON-Server ohne dokumentierte Option, nur auf Loopback zu lauschen. Mit `$EnableFirewallHardening = $true` (Standard) legt das Script daher beim Start eine eingehende Blockier-Regel `HWiNFO-ThermalGuard-Block-NonLocal-60000` für den Port (`$RemoteHWInfoPort`) an, damit andere Geräte im Netz die Sensordaten nicht abrufen können. Das braucht Administratorrechte. Scheitert es, steht eine Warnung im Log. Wieder entfernen: `Remove-NetFirewallRule -DisplayName 'HWiNFO-ThermalGuard-Block-NonLocal-60000'`. Kommt trotz Regel keine Verbindung zustande, setze `$EnableFirewallHardening = $false`.
+RemoteHWInfo ist ein allgemeiner HTTP/JSON-Server ohne dokumentierte Option, nur auf Loopback zu lauschen. Mit `$EnableFirewallHardening = $true` (Standard) legt das Script daher beim Start eine eingehende Blockier-Regel `HWiNFO-ThermalGuard-Block-NonLocal-60000` für den Port (`$RemoteHWInfoPort`) an, damit andere Geräte im Netz die Sensordaten nicht abrufen können. Das braucht Administratorrechte. Scheitert es, steht eine Warnung im Log. Wieder entfernen: `Remove-NetFirewallRule -DisplayName 'HWiNFO-ThermalGuard-Block-NonLocal-60000'`. Der Zugriff über `localhost` (auch der des Guards selbst) bleibt von der Regel unberührt. Ein Leser auf einem **anderen** Gerät, z.B. ein Home-Assistant-Host, wird dadurch aber ebenfalls blockiert. Brauchst du das, oder kommt trotz Regel keine Verbindung zustande, setze `$EnableFirewallHardening = $false`.
+
+---
+
+## Rechte-Prüfung (Ausführung mit Administratorrechten)
+
+Der Guard läuft über den Scheduled Task **erhöht** und startet HWiNFO64, RemoteHWInfo und fipha mit denselben Rechten. Kann ein normaler Benutzer (oder ein nicht erhöhtes Programm deines Kontos) eine dieser Dateien überschreiben, kann es sie austauschen und beim nächsten Start Administratorrechte erlangen. Das gilt auch, wenn **dir** der Ordner gehört: Ein Besitzer kann die Rechte immer selbst neu setzen.
+
+- **Beim Start** prüft das Script nur lesend die Ordner des Scripts und der gestarteten Programme (`$EnableExposureCheck`) und loggt `Security [OK]` oder `Security [WARN] <Pfad> can be modified by non-administrators`.
+- **Beheben:** `Install-ScheduledTask.ps1` prüft dasselbe und zeigt die Ordner. Mit `-FixPermissions` (in einer **erhöhten** PowerShell, nach Rückfrage; `-Yes` überspringt sie) setzt es sie auf: Administratoren und SYSTEM Vollzugriff, Benutzer nur Lesen/Ausführen, Besitzer Administratoren, keine geerbten Einträge. Der HWiNFO64-Ordner wird nur gemeldet, nie verändert. Ordner unter `C:\Windows` und Laufwerks-Wurzeln lehnt es ab.
+- Danach braucht das Bearbeiten der Scripts in diesen Ordnern eine erhöhte Shell oder einen erhöhten Editor.
+
+Von Hand, für einen einzelnen Ordner (erhöhte PowerShell), **in genau dieser Reihenfolge**:
+
+```powershell
+# 1) nur der Ordner selbst, OHNE /T
+icacls "C:\Tools\RemoteHWInfo_v0.5" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-32-545:(OI)(CI)RX"
+# 2) den eigenen Eintrag des Benutzerkontos entfernen (/grant:r entfernt ihn nicht)
+icacls "C:\Tools\RemoteHWInfo_v0.5" /remove "$env:COMPUTERNAME\$env:USERNAME"
+# 3) alles darunter erbt vom Ordner
+icacls "C:\Tools\RemoteHWInfo_v0.5\*" /reset /T /C
+# 4) Besitzer = Administratoren
+icacls "C:\Tools\RemoteHWInfo_v0.5" /setowner "*S-1-5-32-544" /T /C
+```
+
+> **Achtung:** Nicht `icacls <Ordner> /inheritance:r /grant:r … /T` in einem Befehl verwenden. Das lässt jede **Datei** im Ordner mit einer leeren Rechteliste zurück: Niemand kann sie mehr lesen oder starten. Reparatur, falls es passiert ist: Schritte 2 bis 4 von oben (als Besitzer der Dateien geht Schritt 3 auch ohne Adminrechte).
 
 ---
 
@@ -775,6 +815,12 @@ Get-SensorDump.ps1             ──► liest nur, schreibt ThermalGuard-Sensor
 - **RemoteHWInfo Watchdog** erkennt Abstürze und startet den Prozess automatisch neu. Bei Endpoint-Ausfall wird sofort ein Watchdog-Check erzwungen.
 - **Neustart-Schritte blockieren das Polling** kurz (siehe [Watchdog](#was-der-watchdog-macht)). Das passiert fast nur, während HWiNFO ohnehin keine Daten liefert.
 - **GPU Fan 2** (NVIDIA, wo vorhanden) wird erst überwacht, nachdem er in diesem Lauf einmal über 0 RPM gesehen wurde. So löst ein Phantom-Sensor mit 0 RPM auf einer Karte ohne echten zweiten Lüfter nie Stufe 2/3 aus. Ein Lüfter, der schon beim Start tot ist, wird deshalb nicht erkannt. Fehlt `GPU Fan2`, gibt es keinen Alarm.
+- **Kritischer Sensor, der ausfällt:** Läuft für einen Sensor schon der Stufe-2/3-Timer und liefert er dann keinen (oder einen unplausiblen) Wert mehr, oder fällt der ganze Endpoint aus, gilt er als weiterhin kritisch und eskaliert weiter. Der Timer friert nicht ein. Steht die Hardware in dieser Zeit tatsächlich schon wieder kühl da, kommt der Wert zurück und der Timer wird normal zurückgesetzt.
+- **Zeitsprung:** War die Hauptschleife länger als `$LoopGapResetSec` (180 s) nicht aktiv (Standby/Resume, eingefrorener Prozess), werden Stufe-2/3-Timer und Failsafe-Zähler zurückgesetzt statt Zeit zu zählen, die niemand gemessen hat.
+- **Fehler in Nebenfunktionen** (Watchdog, Reports, Sensor-Auswertung eines einzelnen Sensors) werden abgefangen und höchstens alle 10 Minuten pro Teilsystem geloggt (`Subsystem '...' threw`). Sie beenden die Überwachung nicht mehr. Ein Sensor, dessen Auswertung wirft, zählt als ungültig und wird beim Failsafe wie "blind" behandelt.
+- **Stufe 3 startet den Shutdown vor dem Alarm:** `shutdown.exe /s /f /t 10` (`$EmergencyShutdownDelaySec`), danach gehen Toast und ntfy raus. Ein hängender Benachrichtigungsweg kann den Notaus so nicht mehr verzögern; dafür kann die Meldung in den letzten Sekunden abgeschnitten werden.
+- **Crit-Hysterese:** Ein laufender Stufe-2/3-Timer wird erst zurückgesetzt, wenn die Temperatur `$CritResetHysteresisC` (2 °C) **unter** die Crit-Schwelle gefallen ist. Ein Wert, der um die Schwelle pendelt, erreicht so Stufe 3, statt den Timer bei jedem kurzen Abfall unter Crit neu zu starten.
+- **Eine Instanz:** Der Guard läuft nur einmal (benannter Mutex `Global\HWiNFO-ThermalGuard-Instance`). Eine zweite echte Instanz beendet sich mit einer Warnung im Log. `-DryRun`/`-SimulateTemp` und der Update-Installer sind ausgenommen.
 - **Daten-Failsafe** kann einen unnötigen Shutdown auslösen, wenn die Sensor-Anbindung länger als 7 Minuten ausfällt (siehe [Failsafe](#failsafe-bei-datenverlust)). Dafür ist man dann nicht mehr blind unterwegs.
 - **Update-Hash** schützt nicht vor einem kompromittierten Repo, siehe [Update-Sicherheit](#update-sicherheit).
 - **ntfy-Passwort** steht im Klartext im Script (siehe [ntfy](#ntfy-einrichten)).

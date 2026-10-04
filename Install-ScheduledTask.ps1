@@ -24,8 +24,23 @@
 # This script is pure ASCII for the same reason as HWiNFO-ThermalGuard.ps1.
 # ============================================================================
 
+# Permission check (always, read-only): the task runs this folder's scripts and
+# the HWiNFO64 / RemoteHWInfo / fipha programs with administrator rights. If a
+# standard user (or any non-elevated program of yours) can overwrite those files
+# it can replace them and gain administrator rights. The check lists such
+# folders. -FixPermissions restricts them to administrators (Administrators and
+# SYSTEM full control, Users read/execute only, owner = Administrators) after
+# showing the folders and asking for confirmation (-Yes skips the question).
+# The HWiNFO64 folder is only reported, never changed: HWiNFO may need to write
+# its settings there. A folder under Program Files is already protected.
+#
+# Note: after -FixPermissions, editing the ThermalGuard scripts needs an
+# elevated editor / prompt.
+
 param(
-    [int]$RepeatMinutes = 5
+    [int]$RepeatMinutes = 5,
+    [switch]$FixPermissions,
+    [switch]$Yes
 )
 
 $ErrorActionPreference = "Stop"
@@ -162,3 +177,168 @@ if ($RepeatMinutes -gt 0) {
 
 Write-Host "Test it now without logging off: " -NoNewline
 Write-Host "Start-ScheduledTask -TaskName '$TaskName'" -ForegroundColor Cyan
+Write-Host ""
+
+# --- Permission check / fix ------------------------------------------------------
+function Get-WritableByStandardUsers {
+    # Same logic as in HWiNFO-ThermalGuard.ps1 (the two files are deployed separately).
+    # Returns "<account>: <rights>" / "owned by <account>" when $Path can be modified
+    # or re-permissioned by a non-administrator account, otherwise $null.
+    param([string]$Path)
+
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $null }
+
+    $adminClass = @('S-1-5-32-544', 'S-1-5-18', 'S-1-3-0', 'S-1-3-1')
+    $unsafe = New-Object System.Collections.Generic.HashSet[string]
+    foreach ($s in @('S-1-1-0', 'S-1-5-11', 'S-1-5-32-545')) { [void]$unsafe.Add($s) }
+    $me = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    [void]$unsafe.Add($me.User.Value)
+    foreach ($g in $me.Groups) {
+        $v = $g.Value
+        if ($adminClass -contains $v -or $v -like 'S-1-5-80-*') { continue }
+        [void]$unsafe.Add($v)
+    }
+
+    $fsr  = [System.Security.AccessControl.FileSystemRights]
+    $mask = $fsr::WriteData -bor $fsr::AppendData -bor $fsr::Delete -bor $fsr::DeleteSubdirectoriesAndFiles -bor $fsr::ChangePermissions -bor $fsr::TakeOwnership
+
+    try { $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop } catch { return $null }
+
+    try {
+        $ownerSid = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+        if ($unsafe.Contains($ownerSid) -and $adminClass -notcontains $ownerSid) {
+            return "owned by $($acl.Owner) (an owner can always rewrite the permissions)"
+        }
+    } catch { }
+
+    foreach ($rule in $acl.Access) {
+        if ($rule.AccessControlType -ne 'Allow') { continue }
+        if (($rule.FileSystemRights -band $mask) -eq 0) { continue }
+        try { $sid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { continue }
+        if ($unsafe.Contains($sid)) { return "$($rule.IdentityReference): $($rule.FileSystemRights)" }
+    }
+    return $null
+}
+
+function Protect-Folder {
+    # Administrators + SYSTEM full control, Users read/execute, no inherited entries,
+    # owner = Administrators. Uses well-known SIDs, so it is language independent.
+    param([string]$Path)
+
+    # This script runs with $ErrorActionPreference = "Stop". In Windows PowerShell 5.1 that
+    # turns ANY stderr line of a native command captured with 2>&1 (icacls prints
+    # "Access denied" when the owner cannot be changed) into a terminating error and would
+    # abort this function half way. Local to this function only.
+    $ErrorActionPreference = 'Continue'
+
+    $full = [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
+    if ($full.Length -le 3) { throw "Refusing to change the permissions of a drive root: $Path" }
+    if ($env:SystemRoot -and $full.StartsWith($env:SystemRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to change the permissions of a folder inside the Windows directory: $Path"
+    }
+
+    # 1) The folder itself: no inheritance and ONLY these three entries. Every other
+    #    explicit entry (e.g. the current user's own) is removed, which "icacls /grant:r"
+    #    does not do.
+    $sidSystem = New-Object System.Security.Principal.SecurityIdentifier 'S-1-5-18'
+    $sidAdmins = New-Object System.Security.Principal.SecurityIdentifier 'S-1-5-32-544'
+    $sidUsers  = New-Object System.Security.Principal.SecurityIdentifier 'S-1-5-32-545'
+    $inherit   = [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+    $noProp    = [System.Security.AccessControl.PropagationFlags]::None
+    $aclOk = $true
+    try {
+        $acl = Get-Acl -LiteralPath $full -ErrorAction Stop
+        $acl.SetAccessRuleProtection($true, $false)
+        foreach ($r in @($acl.Access)) { [void]$acl.RemoveAccessRule($r) }
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($sidSystem, 'FullControl',      $inherit, $noProp, 'Allow')))
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($sidAdmins, 'FullControl',      $inherit, $noProp, 'Allow')))
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($sidUsers,  'ReadAndExecute',   $inherit, $noProp, 'Allow')))
+        Set-Acl -LiteralPath $full -AclObject $acl -ErrorAction Stop
+    } catch { $aclOk = $false }
+
+    # 2) Everything below inherits from the folder. Do NOT use
+    #    "icacls <folder> /inheritance:r /grant:r ... /T" for this: it leaves every FILE
+    #    with an EMPTY permission list, i.e. nobody (not even an administrator) can read
+    #    or start it any more.
+    $null = & icacls.exe "$full\*" /reset /T /C 2>&1
+
+    # 3) Owner = Administrators. Only works from an elevated prompt, and only after step
+    #    2: the files must already grant Administrators full control.
+    $null = & icacls.exe $full /setowner '*S-1-5-32-544' /T /C 2>&1
+
+    # icacls reports success (exit code 0) even when a non-elevated prompt could not
+    # change the owner, so read the result back instead of trusting exit codes.
+    $ownerOk = $false
+    try { $ownerOk = ((Get-Acl -LiteralPath $full -ErrorAction Stop).GetOwner([System.Security.Principal.SecurityIdentifier]).Value -eq 'S-1-5-32-544') } catch { }
+    $emptyAcl = @(Get-ChildItem -LiteralPath $full -Recurse -Force -ErrorAction SilentlyContinue |
+                  Where-Object { @((Get-Acl -LiteralPath $_.FullName -ErrorAction SilentlyContinue).Access).Count -eq 0 })
+    return [pscustomobject]@{ Path = $full; PermissionsSet = ($aclOk -and $emptyAcl.Count -eq 0); OwnerSet = $ownerOk; FilesWithEmptyAcl = $emptyAcl.Count }
+}
+
+try {
+    Write-Host "--- Permission check (this task runs these folders with administrator rights) ---" -ForegroundColor Cyan
+    $toolsDir = "C:\Tools"
+    $targets  = New-Object System.Collections.ArrayList
+    [void]$targets.Add([pscustomobject]@{ Path = $ScriptDir; Fix = $true; What = "ThermalGuard scripts" })
+    if (Test-Path -LiteralPath $toolsDir) {
+        foreach ($spec in @(@('RemoteHWInfo.exe', $true), @('fipha.exe', $true), @('HWiNFO64.exe', $false))) {
+            Get-ChildItem -LiteralPath $toolsDir -Filter $spec[0] -Recurse -Depth 3 -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -notmatch '\\WindowsApps\\' } |
+                ForEach-Object { [void]$targets.Add([pscustomobject]@{ Path = $_.DirectoryName; Fix = $spec[1]; What = $_.Name }) }
+        }
+    }
+
+    $exposed = New-Object System.Collections.ArrayList
+    foreach ($t in ($targets | Sort-Object Path -Unique)) {
+        $why = Get-WritableByStandardUsers -Path $t.Path
+        if ($why) {
+            [void]$exposed.Add($t)
+            Write-Host "  [EXPOSED] $($t.Path)  ($($t.What)): $why" -ForegroundColor Yellow
+        } else {
+            Write-Host "  [ok]      $($t.Path)  ($($t.What))" -ForegroundColor Green
+        }
+    }
+
+    if ($exposed.Count -eq 0) {
+        Write-Host "No folder can be modified by standard users." -ForegroundColor Green
+    }
+    elseif (-not $FixPermissions) {
+        Write-Host ""
+        Write-Host "A non-elevated program could replace files in the folders above and gain administrator rights." -ForegroundColor Yellow
+        Write-Host "To restrict them to administrators, run this script again with -FixPermissions." -ForegroundColor Yellow
+    }
+    else {
+        $fixable = @($exposed | Where-Object { $_.Fix })
+        $manual  = @($exposed | Where-Object { -not $_.Fix })
+        foreach ($m in $manual) {
+            Write-Host "  Not changed automatically: $($m.Path) ($($m.What)). Restrict it by hand if HWiNFO does not need to write there." -ForegroundColor Yellow
+        }
+        if ($fixable.Count -gt 0) {
+            Write-Host ""
+            Write-Host "-FixPermissions will set these folders (and everything below them) to:" -ForegroundColor Cyan
+            Write-Host "  Administrators + SYSTEM: full control | Users: read and execute | owner: Administrators | no inherited entries"
+            foreach ($f in $fixable) { Write-Host "  $($f.Path)" }
+            $go = $Yes
+            if (-not $go) {
+                $answer = Read-Host "Apply now? [y/N]"
+                $go = ($answer -match '^(?i)y(es)?$')
+            }
+            if (-not $go) {
+                Write-Host "Cancelled. Nothing was changed." -ForegroundColor Yellow
+            } else {
+                foreach ($f in $fixable) {
+                    $r = Protect-Folder -Path $f.Path
+                    if ($r.PermissionsSet -and $r.OwnerSet) { Write-Host "  [done]  $($r.Path)" -ForegroundColor Green }
+                    else { Write-Host "  [PARTIAL] $($r.Path): permissions set = $($r.PermissionsSet), owner set = $($r.OwnerSet) (the owner change needs an elevated prompt)" -ForegroundColor Yellow }
+                    if ($r.FilesWithEmptyAcl -gt 0) {
+                        Write-Host "  [ERROR]   $($r.FilesWithEmptyAcl) file(s) in $($r.Path) have an EMPTY permission list and cannot be read or started. Repair: icacls `"$($r.Path)\*`" /reset /T /C" -ForegroundColor Red
+                    }
+                    $left = Get-WritableByStandardUsers -Path $f.Path
+                    if ($left) { Write-Host "            still exposed: $left" -ForegroundColor Yellow }
+                }
+            }
+        }
+    }
+} catch {
+    Write-Host "Permission check failed (the task itself is registered): $($_.Exception.Message)" -ForegroundColor Yellow
+}
