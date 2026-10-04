@@ -34,6 +34,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Run behavior tests
-        shell: ${{ matrix.shell }}
+      # The "shell:" key does not accept expressions (a matrix reference there makes
+      # GitHub reject the whole file as invalid), so there is one step per edition
+      # with a fixed shell; "if:" may use the matrix.
+      - name: Run behavior tests (PowerShell 7)
+        if: matrix.shell == 'pwsh'
+        shell: pwsh
+        run: ./tests/Run-Tests.ps1
+
+      - name: Run behavior tests (Windows PowerShell 5.1)
+        if: matrix.shell == 'powershell'
+        shell: powershell
         run: ./tests/Run-Tests.ps1
