@@ -328,6 +328,7 @@ $DataLossShutdownSec    = 420   # after 7 min blind: emergency shutdown (like st
 - The normal alerts ("data source offline", "Sensor missing") still arrive long before.
 - **After a hardware swap:** check the sensor labels in the self-test log (see [Checking sensor labels](#checking-sensor-labels-troubleshooting)). If a label does not match, the guard would be blind and the fail-safe shuts down after 7 minutes. During a swap set `$EnableGPU = $false` as before.
 - Turn off: `$EnableDataLossFailsafe = $false` (old behavior: alert only).
+- **Boot-loop breaker:** if the guard can never read a valid CPU/GPU value (label no longer matches, Intel CPU), the fail-safe would otherwise shut the PC down 7 minutes after every logon. Each fail-safe shutdown is therefore recorded in `%USERPROFILE%\HWiNFO-ThermalGuard\failsafe-shutdowns.txt`. If there were `$FailsafeMaxConsecutiveShutdowns` (2) of them within `$FailsafeLoopWindowMinutes` (60) without a single healthy poll in between, the guard **no longer shuts down** on data loss: it alerts urgently (every 15 minutes) and logs `shutdown SUPPRESSED`. The PC is unprotected until the sensor data is fixed. Stage 2 (process list) stays active. The first healthy poll clears the record. Turn off: `$FailsafeMaxConsecutiveShutdowns = 0`.
 
 ### Process list (stage 2)
 
@@ -427,7 +428,7 @@ Only a fixed list of folders is scanned (each including subfolders down to depth
 2. `C:\Tools\RemoteHWInfo\`
 3. `C:\Tools\` (incl. subfolders, finds e.g. `C:\Tools\RemoteHWInfo_v0.5\`)
 4. System PATH
-5. Auto-download from GitHub → `C:\Tools\RemoteHWInfo\` (the SHA-256 of the download is only logged, not checked against a fixed value: compare it with the release page)
+5. Auto-download from GitHub → `C:\Tools\RemoteHWInfo\` (the download is pinned to a fixed SHA-256, `$RemoteHWInfoZipSha256`; a different file is not unpacked)
 
 ### fipha (only with `$EnableFipha = $true`)
 
@@ -521,6 +522,31 @@ For this the script is copied to a temp folder and patched there (other port and
 ## Firewall hardening
 
 RemoteHWInfo is a generic HTTP/JSON server without a documented option to listen on loopback only. With `$EnableFirewallHardening = $true` (default) the script therefore creates an inbound block rule `HWiNFO-ThermalGuard-Block-NonLocal-60000` for the port (`$RemoteHWInfoPort`) at startup, so other devices on the network cannot fetch the sensor data. This needs administrator rights. If it fails there is a warning in the log. To remove it: `Remove-NetFirewallRule -DisplayName 'HWiNFO-ThermalGuard-Block-NonLocal-60000'`. Access via `localhost` (including the guard's own) is not affected by the rule. A reader on **another** device, e.g. a Home Assistant host, is blocked as well. If you need that, or the connection fails despite the rule, set `$EnableFirewallHardening = $false`.
+
+---
+
+## Permission check (running with administrator rights)
+
+The guard runs **elevated** through the scheduled task and starts HWiNFO64, RemoteHWInfo and fipha with the same rights. If a standard user (or a non-elevated program of your account) can overwrite one of these files, it can replace it and gain administrator rights at the next start. That also applies when **you** own the folder: an owner can always rewrite the permissions.
+
+- **At startup** the script only checks, read-only, the folders of the script and of the programs it starts (`$EnableExposureCheck`) and logs `Security [OK]` or `Security [WARN] <path> can be modified by non-administrators`.
+- **Fixing:** `Install-ScheduledTask.ps1` runs the same check and lists the folders. With `-FixPermissions` (in an **elevated** PowerShell, after a confirmation; `-Yes` skips it) it sets them to: Administrators and SYSTEM full control, Users read/execute only, owner Administrators, no inherited entries. The HWiNFO64 folder is only reported, never changed. It refuses folders under `C:\Windows` and drive roots.
+- Afterwards, editing the scripts in those folders needs an elevated shell or editor.
+
+By hand, for a single folder (elevated PowerShell), **in exactly this order**:
+
+```powershell
+# 1) the folder itself only, WITHOUT /T
+icacls "C:\Tools\RemoteHWInfo_v0.5" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-32-545:(OI)(CI)RX"
+# 2) remove the user account's own entry (/grant:r does not remove it)
+icacls "C:\Tools\RemoteHWInfo_v0.5" /remove "$env:COMPUTERNAME\$env:USERNAME"
+# 3) everything below inherits from the folder
+icacls "C:\Tools\RemoteHWInfo_v0.5\*" /reset /T /C
+# 4) owner = Administrators
+icacls "C:\Tools\RemoteHWInfo_v0.5" /setowner "*S-1-5-32-544" /T /C
+```
+
+> **Warning:** do not use `icacls <folder> /inheritance:r /grant:r ... /T` as a single command. It leaves every **file** in the folder with an empty permission list: nobody can read or start it any more. Repair if it happened: steps 2 to 4 above (as the owner of the files, step 3 also works without administrator rights).
 
 ---
 

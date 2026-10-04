@@ -339,6 +339,18 @@ $EnableDataLossFailsafe = $true
 $DataLossStage2Sec      = 180
 $DataLossShutdownSec    = 420
 
+# Boot-loop breaker for the fail-safe SHUTDOWN. If the guard can never read a
+# valid CPU/GPU temperature (sensor label does not match after a hardware swap
+# or an HWiNFO update, Intel CPU, ...) the fail-safe would shut the PC down 7
+# minutes after EVERY logon, forever. Each fail-safe shutdown is therefore
+# recorded; once this many happened within the window and no healthy poll has
+# happened in between, the next run does NOT shut down on data loss any more:
+# it keeps alerting (urgent, every 15 minutes) so the cause can be fixed. The
+# record is cleared by the first healthy poll. Stage 2 (kill list) stays active.
+# Set $FailsafeMaxConsecutiveShutdowns = 0 to disable the breaker.
+$FailsafeMaxConsecutiveShutdowns = 2
+$FailsafeLoopWindowMinutes       = 60
+
 # --- TIMING --------------------------------------------------------------------
 $PollInterval = 5
 $Stage2Delay  = 30
@@ -400,6 +412,16 @@ $EndpointUnhealthyCyclesBeforeRestart = 3
 # Set this to $false if you need that. Requires admin rights, which this script
 # already needs for shutdown.exe.
 $EnableFirewallHardening = $true
+
+# --- EXECUTION-EXPOSURE CHECK ------------------------------------------------------
+# This script runs elevated (Scheduled Task, highest privileges) and starts
+# HWiNFO64 / RemoteHWInfo / fipha with the same rights. If a standard user (or a
+# non-elevated program of yours) can overwrite any of those files, it can
+# replace them and gain administrator rights at the next start. At startup the
+# script only CHECKS (read-only) the folders of the script and of the programs
+# it launches and logs a warning. To fix the permissions run
+# Install-ScheduledTask.ps1 -FixPermissions once, as administrator.
+$EnableExposureCheck = $true
 $RemoteHWInfoPort        = 60000
 
 # DryRun / SimulateTemp: this instance must never touch processes, restart
@@ -429,6 +451,14 @@ $MaxLogFilesToKeep = 10   # rotated thermalguard_*.log files kept besides the li
 # waits for exactly this line (with a timestamp after the restart) before it
 # calls an update healthy.
 $HealthMarkerText = "HEALTHY: first successful sensor poll"
+
+# Fail-safe shutdown history for the boot-loop breaker (one ISO timestamp per line).
+$FailsafeHistoryFile = Join-Path $LogDir "failsafe-shutdowns.txt"
+
+# RemoteHWInfo is only downloaded when it is not installed. The download is
+# pinned to this SHA-256 and refused when it differs. Change URL and hash together.
+$RemoteHWInfoZipUrl    = "https://github.com/Demion/remotehwinfo/releases/download/v0.5/RemoteHWInfo_v0.5.zip"
+$RemoteHWInfoZipSha256 = "3cb5a6e16610ab11c6709caf7bf6c04e841d0e1db5d663cfbde897e43cf1c88c"
 
 # === LOGGING (must be defined before anything else can call it) =============
 
@@ -575,7 +605,7 @@ function Resolve-RemoteHWInfo {
 
     Write-Log "RemoteHWInfo    [MISSING] Downloading..." "WARN"
     try {
-        $downloadUrl = "https://github.com/Demion/remotehwinfo/releases/download/v0.5/RemoteHWInfo_v0.5.zip"
+        $downloadUrl = $RemoteHWInfoZipUrl
         $targetDir   = Join-Path $ToolsDir "RemoteHWInfo"
         $zipFile     = Join-Path $env:TEMP "RemoteHWInfo_v0.5.zip"
 
@@ -585,16 +615,21 @@ function Resolve-RemoteHWInfo {
         Write-Log "  Download: $downloadUrl"
         Invoke-WebRequest -Uri $downloadUrl -OutFile $zipFile -UseBasicParsing -TimeoutSec 60
 
-        # Report finding #21: there is no publicly pinned, independently
-        # verifiable hash for this release published by the upstream
-        # project to check against here. The honest mitigation available
-        # without fabricating a false sense of verification is to compute
-        # and clearly log the hash of what was actually downloaded, so a
-        # human operator can cross-check it against the GitHub release
-        # page or VirusTotal before trusting it on a sensitive machine.
-        $hash = (Get-FileHash -Path $zipFile -Algorithm SHA256).Hash
-        Write-Log "  Downloaded file SHA-256: $hash" "WARN"
-        Write-Log "  This hash is NOT verified against a pinned value. Cross-check it manually at https://github.com/Demion/remotehwinfo/releases/tag/v0.5 before trusting this binary." "WARN"
+        # Report finding #21: the upstream project publishes no hash, so the one
+        # pinned in $RemoteHWInfoZipSha256 is the SHA-256 of the v0.5 release ZIP
+        # as it was when this version of the script was made (and its
+        # remotehwinfo.exe matches the long-running installed one). A different
+        # file (changed release asset, tampered download) is refused instead of
+        # being unpacked and started with administrator rights.
+        $hash = (Get-FileHash -Path $zipFile -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($hash -ne $RemoteHWInfoZipSha256.ToLowerInvariant()) {
+            Write-Log "  Downloaded file SHA-256: $hash" "ERROR"
+            Write-Log "  Expected (pinned)      : $RemoteHWInfoZipSha256" "ERROR"
+            Write-Log "  The download does not match the pinned hash and is NOT unpacked. If you intentionally use another release, change `$RemoteHWInfoZipUrl and `$RemoteHWInfoZipSha256 together." "ERROR"
+            Remove-Item $zipFile -Force -ErrorAction SilentlyContinue
+            throw "RemoteHWInfo download failed the SHA-256 check"
+        }
+        Write-Log "  SHA-256 verified against the pinned value: $hash"
 
         Expand-Archive -Path $zipFile -DestinationPath $targetDir -Force
         Remove-Item $zipFile -Force -ErrorAction SilentlyContinue
@@ -684,6 +719,75 @@ function Set-FirewallHardening {
     } catch {
         Write-Log "Firewall        [WARN] Could not create block rule: $_" "WARN"
         Write-Log "  RemoteHWInfo port $RemoteHWInfoPort may be reachable from other devices on this network." "WARN"
+    }
+}
+
+# === EXECUTION-EXPOSURE CHECK ================================================
+# Read-only. See $EnableExposureCheck in the config block.
+
+function Get-WritableByStandardUsers {
+    # Returns a short description ("<account>: <rights>" or "owned by <account>")
+    # when $Path can be modified or re-permissioned by an account that is NOT
+    # administrator-class, otherwise $null. SID based, so it works on every
+    # Windows language. "Standard" here = Everyone, Authenticated Users, Users,
+    # the current user and every other group in the current user's token except
+    # Administrators / SYSTEM / TrustedInstaller / CREATOR OWNER.
+    param([string]$Path)
+
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $null }
+
+    $adminClass = @('S-1-5-32-544', 'S-1-5-18', 'S-1-3-0', 'S-1-3-1')
+    $unsafe = New-Object System.Collections.Generic.HashSet[string]
+    foreach ($s in @('S-1-1-0', 'S-1-5-11', 'S-1-5-32-545')) { [void]$unsafe.Add($s) }
+    $me = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    [void]$unsafe.Add($me.User.Value)
+    foreach ($g in $me.Groups) {
+        $v = $g.Value
+        if ($adminClass -contains $v -or $v -like 'S-1-5-80-*') { continue }
+        [void]$unsafe.Add($v)
+    }
+
+    $fsr  = [System.Security.AccessControl.FileSystemRights]
+    $mask = $fsr::WriteData -bor $fsr::AppendData -bor $fsr::Delete -bor $fsr::DeleteSubdirectoriesAndFiles -bor $fsr::ChangePermissions -bor $fsr::TakeOwnership
+
+    try { $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop } catch { return $null }
+
+    try {
+        $ownerSid = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+        if ($unsafe.Contains($ownerSid) -and $adminClass -notcontains $ownerSid) {
+            return "owned by $($acl.Owner) (an owner can always rewrite the permissions)"
+        }
+    } catch { }
+
+    foreach ($rule in $acl.Access) {
+        if ($rule.AccessControlType -ne 'Allow') { continue }
+        if (($rule.FileSystemRights -band $mask) -eq 0) { continue }
+        try { $sid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { continue }
+        if ($unsafe.Contains($sid)) { return "$($rule.IdentityReference): $($rule.FileSystemRights)" }
+    }
+    return $null
+}
+
+function Test-ElevatedExecutionExposure {
+    $targets = New-Object System.Collections.Generic.List[string]
+    if ($PSCommandPath) { $targets.Add($PSCommandPath); $targets.Add((Split-Path -Parent $PSCommandPath)) }
+    foreach ($exe in @($script:ResolvedHWiNFO, $script:ResolvedRemoteHWInfo, $script:ResolvedFipha)) {
+        if ($exe) { $targets.Add($exe); $targets.Add((Split-Path -Parent $exe)) }
+    }
+
+    $exposed = 0
+    foreach ($path in ($targets | Select-Object -Unique)) {
+        $why = Get-WritableByStandardUsers -Path $path
+        if ($why) {
+            $exposed++
+            Write-Log "Security        [WARN] $path can be modified by non-administrators ($why)." "WARN"
+        }
+    }
+    if ($exposed -gt 0) {
+        Write-Log "  This script and these programs run with administrator rights, so a non-elevated program could replace them to gain those rights." "WARN"
+        Write-Log "  Fix: run Install-ScheduledTask.ps1 -FixPermissions once as administrator (it restricts write access to administrators)." "WARN"
+    } else {
+        Write-Log "Security        [OK] script and program folders are not writable by standard users"
     }
 }
 
@@ -2149,7 +2253,7 @@ function Invoke-KillProcesses {
 function Invoke-Shutdown {
     if ($DryRun) {
         Write-Log "=== STAGE 3: EMERGENCY SHUTDOWN [DRYRUN] ===" "CRIT"
-        Write-Log "[DRYRUN] would run: shutdown.exe /s /f /t 0 - NOT executed. Simulation ends here, the script exits." "CRIT"
+        Write-Log "[DRYRUN] would run: shutdown.exe /s /f /t $EmergencyShutdownDelaySec - NOT executed. Simulation ends here, the script exits." "CRIT"
         Send-Alert -Title "EMERGENCY SHUTDOWN" -Body "Dry run: the system would be shutting down now. Nothing was shut down." -Priority "urgent"
         return
     }
@@ -2174,6 +2278,39 @@ function Invoke-Shutdown {
 
 $script:BlindSince      = $null
 $script:BlindStage2Done = $false
+
+# Boot-loop breaker state (see $FailsafeMaxConsecutiveShutdowns in the config block).
+$script:FailsafeShutdownDisarmed = $false
+$script:LastDisarmedAlert        = $null
+
+function Get-RecentFailsafeShutdowns {
+    if (-not (Test-Path -LiteralPath $FailsafeHistoryFile)) { return @() }
+    $cut = (Get-Date).AddMinutes(-$FailsafeLoopWindowMinutes)
+    $recent = @()
+    foreach ($line in @(Get-Content -LiteralPath $FailsafeHistoryFile -ErrorAction SilentlyContinue)) {
+        $dt = [datetime]::MinValue
+        if ([datetime]::TryParse(([string]$line).Trim(), [System.Globalization.CultureInfo]::InvariantCulture,
+                                 [System.Globalization.DateTimeStyles]::RoundtripKind, [ref]$dt) -and $dt -ge $cut) {
+            $recent += $dt
+        }
+    }
+    return $recent
+}
+
+function Add-FailsafeShutdownRecord {
+    try {
+        $keep = @(Get-RecentFailsafeShutdowns | ForEach-Object { $_.ToString('o') })
+        Set-Content -LiteralPath $FailsafeHistoryFile -Value ($keep + (Get-Date).ToString('o')) -Encoding ASCII -ErrorAction Stop
+    } catch {
+        Write-Log "Data-loss fail-safe: could not record the shutdown for the boot-loop breaker: $_" "WARN"
+    }
+}
+
+function Clear-FailsafeShutdownRecords {
+    if (Test-Path -LiteralPath $FailsafeHistoryFile) {
+        Remove-Item -LiteralPath $FailsafeHistoryFile -Force -ErrorAction SilentlyContinue
+    }
+}
 
 function Invoke-DataLossFailsafe {
     param([bool]$IsBlind)
@@ -2208,11 +2345,38 @@ function Invoke-DataLossFailsafe {
     }
 
     if ($blindSec -ge $DataLossShutdownSec) {
+        if ($script:FailsafeShutdownDisarmed) {
+            # Boot-loop protection: the last fail-safe shutdowns were not followed by a
+            # single healthy poll, so shutting down again would only repeat the loop.
+            if ($null -eq $script:LastDisarmedAlert -or ((Get-Date) - $script:LastDisarmedAlert).TotalMinutes -ge 15) {
+                $script:LastDisarmedAlert = Get-Date
+                Write-Log "Data-loss fail-safe: blind for ${blindSec}s, shutdown SUPPRESSED by the boot-loop breaker ($FailsafeMaxConsecutiveShutdowns fail-safe shutdowns in the last ${FailsafeLoopWindowMinutes} min without a healthy poll). The PC is NOT protected until the sensor data is fixed." "CRIT"
+                Send-Alert -Title "Fail-safe shutdown SUPPRESSED (boot-loop protection)" `
+                    -Body "No valid CPU/GPU temperature for ${blindSec}s and the last fail-safe shutdowns did not help. The PC is unprotected: check the sensor labels (see the self-test in thermalguard.log)." `
+                    -Priority "urgent"
+            }
+            return $false
+        }
+        if (-not $DryRun) { Add-FailsafeShutdownRecord }
         Write-Log "Data-loss fail-safe: blind for ${blindSec}s, SHUTDOWN" "CRIT"
         Invoke-Shutdown
         return $true
     }
     return $false
+}
+
+# === POLL TIMING ==============================================================
+# Sleeps for what is LEFT of $PollInterval after this iteration's own work. A
+# fixed Start-Sleep made the real cycle "work + interval" (about 9 s instead of
+# 5 s with a few hundred readings), so Stage 2/3 fired up to a whole cycle
+# late (36 s instead of 30 s, 92 s instead of 90 s). 200 ms minimum keeps a
+# very slow iteration from spinning.
+
+function Wait-NextPoll {
+    param([datetime]$Since)
+    $left = $PollInterval - ((Get-Date) - $Since).TotalSeconds
+    if ($left -lt 0.2) { $left = 0.2 }
+    Start-Sleep -Milliseconds ([int]($left * 1000))
 }
 
 # === STAGE 2 / 3 ESCALATION FOR A RUNNING CRITICAL TIMER ======================
@@ -2489,6 +2653,10 @@ function Start-ThermalGuard {
         $script:HWiNFOStartTime = if ($hwProc) { $hwProc.StartTime } else { Get-Date }
     }
 
+    if ($EnableExposureCheck) {
+        try { Test-ElevatedExecutionExposure } catch { Write-GuardError -Name "Exposure check" -ErrorRecord $_ }
+    }
+
     Invoke-UpdateCheck
 
     $triggerTimestamps      = @{}
@@ -2506,6 +2674,16 @@ function Start-ThermalGuard {
     $fanSeenSpinning        = @{}
     $presumedLogged         = @{}
     $lastLoopTick           = $null
+
+    # Boot-loop breaker: were the last fail-safe shutdowns never followed by a healthy poll?
+    $script:FailsafeShutdownDisarmed = $false
+    if ($EnableDataLossFailsafe -and -not $DryRun -and $FailsafeMaxConsecutiveShutdowns -gt 0) {
+        $recentShutdowns = @(Get-RecentFailsafeShutdowns)
+        if ($recentShutdowns.Count -ge $FailsafeMaxConsecutiveShutdowns) {
+            $script:FailsafeShutdownDisarmed = $true
+            Write-Log "Data-loss fail-safe: $($recentShutdowns.Count) fail-safe shutdown(s) in the last ${FailsafeLoopWindowMinutes} min and no healthy poll since. Boot-loop breaker ACTIVE: this run will alert instead of shutting down on data loss until valid temperature data is seen." "WARN"
+        }
+    }
 
     # Primary temperature sensors: if none of these has a valid reading the
     # guard is blind (see Invoke-DataLossFailsafe).
@@ -2564,7 +2742,7 @@ function Start-ThermalGuard {
                 }
                 if ((Invoke-CriticalEscalation -Name $critName -ValueText "no data (presumed critical)" -TriggerTimestamps $triggerTimestamps -Stage2Executed $stage2Executed) -contains $true) { return }
             }
-            Start-Sleep -Seconds $PollInterval
+            Wait-NextPoll -Since $loopTick
             continue
         }
 
@@ -2862,13 +3040,18 @@ function Start-ThermalGuard {
         if (-not $healthMarkerLogged -and -not $isBlind) {
             Write-Log "=== $HealthMarkerText ($($tempOk.Count) temperature sensor(s) resolved) ==="
             $healthMarkerLogged = $true
+            # The sensor data works: whatever caused earlier fail-safe shutdowns is gone.
+            if (-not $DryRun) {
+                $script:FailsafeShutdownDisarmed = $false
+                Clear-FailsafeShutdownRecords
+            }
         }
 
         if ((Invoke-DataLossFailsafe -IsBlind $isBlind) -contains $true) { return }
 
         $script:AnyStageCriticalActive = (($triggerTimestamps.Count -gt 0) -or ($null -ne $script:BlindSince))
 
-        Start-Sleep -Seconds $PollInterval
+        Wait-NextPoll -Since $loopTick
     }
 }
 

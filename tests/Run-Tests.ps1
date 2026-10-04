@@ -70,6 +70,9 @@ $Stage3Delay    = 14
 $PollInterval   = 1
 $EnableWatchdog = $false
 if ($env:TG_GAP) { $LoopGapResetSec = [int]$env:TG_GAP }
+if ($env:TG_POLL) { $PollInterval = [int]$env:TG_POLL }
+if ($env:TG_FS_STAGE2)   { $DataLossStage2Sec   = [int]$env:TG_FS_STAGE2 }
+if ($env:TG_FS_SHUTDOWN) { $DataLossShutdownSec = [int]$env:TG_FS_SHUTDOWN }
 $script:DetectedGPUName = "NVIDIA GeForce RTX 5070 Ti"
 function Send-Toast { param([string]$Title, [string]$Body) Write-Log "[TEST toast] $Title | $Body" }
 if (-not $DryRun) {
@@ -143,8 +146,9 @@ function Get-GuardLog { if (Test-Path $LogFile) { return [System.IO.File]::ReadA
 
 # Runs the guard for up to $Duration seconds while the mock endpoint follows the timeline.
 function Invoke-Guard {
-    param([int]$Duration, [object[]]$Timeline, [hashtable]$EnvVars = @{}, [string[]]$GuardArgs = @('-DryRun'))
+    param([int]$Duration, [object[]]$Timeline, [hashtable]$EnvVars = @{}, [string[]]$GuardArgs = @('-DryRun'), [scriptblock]$Seed = $null)
     Reset-Work
+    if ($Seed) { & $Seed }
     Write-Scenario $Timeline[0].Sc
     foreach ($k in $EnvVars.Keys) { Set-Item -Path "Env:$k" -Value $EnvVars[$k] }
     try { $p = Start-Guard $GuardArgs } finally { foreach ($k in $EnvVars.Keys) { Remove-Item -Path "Env:$k" -ErrorAction SilentlyContinue } }
@@ -163,6 +167,12 @@ function Invoke-Guard {
     return [pscustomobject]@{ Log = (Get-GuardLog); Exit = $exit; Stderr = $err }
 }
 
+function Get-LogTime([string]$Log, [string]$Pattern) {
+    $m = [regex]::Match($Log, '(?m)^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\][^\r\n]*' + $Pattern)
+    if (-not $m.Success) { return $null }
+    return [datetime]::ParseExact($m.Groups[1].Value, 'yyyy-MM-dd HH:mm:ss', [System.Globalization.CultureInfo]::InvariantCulture)
+}
+
 function Test-Result($Res, $Spec) {
     $fail = New-Object System.Collections.ArrayList
     foreach ($re in @($Spec.Expect)) { if ($re -and $Res.Log -notmatch $re) { [void]$fail.Add("missing in log: $re") } }
@@ -179,6 +189,14 @@ function Test-Result($Res, $Spec) {
         if (-not $a.Success -or -not $b.Success) { [void]$fail.Add("order check: pattern missing ($($Spec.Order -join '  BEFORE  '))") }
         elseif ($a.Index -ge $b.Index) { [void]$fail.Add("wrong order, expected first: $($Spec.Order[0])  then: $($Spec.Order[1])") }
     }
+    foreach ($tm in @($Spec.Timing)) {
+        if (-not $tm) { continue }
+        $t0 = Get-LogTime $Res.Log $tm.From; $t1 = Get-LogTime $Res.Log $tm.To
+        if ($null -eq $t0 -or $null -eq $t1) { [void]$fail.Add("timing check: pattern missing ($($tm.From) / $($tm.To))"); continue }
+        $d = ($t1 - $t0).TotalSeconds
+        if ($d -lt $tm.Min -or $d -gt $tm.Max) { [void]$fail.Add("timing: '$($tm.To)' came $d s after '$($tm.From)', expected $($tm.Min)..$($tm.Max) s") }
+    }
+    if ($Spec.Check) { foreach ($x in @(& $Spec.Check $Res)) { if ($x -is [string]) { [void]$fail.Add($x) } } }
     $wantExit = if ($Spec.Exit) { $Spec.Exit } else { "running" }
     if ($wantExit -eq "self") { if ($Res.Exit -ne 0) { [void]$fail.Add("expected the script to end by itself with exit 0, got: $($Res.Exit)") } }
     elseif ($Res.Exit -ne "running") { [void]$fail.Add("expected the script to keep running, but it ended (exit $($Res.Exit))") }
@@ -194,8 +212,13 @@ $Gone     = NewSc -Remove @(@{ label = 'GPU Memory Junction Temperature' })
 
 $Scenarios = @(
     @{ Name = 'baseline'; Duration = 8; Timeline = @(@{ At = 0; Sc = (NewSc) })
-       Expect = @('GPU sensor index: sensorIndex 10 resolved', 'HEALTHY: first successful sensor poll')
+       Expect = @('GPU sensor index: sensorIndex 10 resolved', 'HEALTHY: first successful sensor poll', 'Security +\[(OK|WARN)\]')
        Forbid = @('threw', 'CRITICAL', 'Temps back to normal', 'FATAL') }
+
+    @{ Name = 'stage-timing-compensates-for-slow-polls'; Duration = 26; Exit = 'self'; Env = @{ TG_POLL = '3' }
+       Timeline = @(@{ At = 0; Sc = (NewSc -Set @(Rdg 'GPU Memory Junction Temperature' 101) -Delay 2) })
+       Expect = @('stage 3: SHUTDOWN')
+       Timing = @(@{ From = 'GPU Memory Junction: CRITICAL value'; To = 'GPU Memory Junction: \d+s critical, stage 2'; Min = 5; Max = 8 }) }
 
     @{ Name = 'fan-zero-rpm-cool-gpu-no-alarm'; Duration = 22
        Timeline = @(@{ At = 0; Sc = (NewSc -Set ($FansRun  + (Rdg 'GPU Temperature' 45))) }, @{ At = 3; Sc = (NewSc -Set ($FansStop + (Rdg 'GPU Temperature' 45))) })
@@ -257,6 +280,30 @@ $Scenarios = @(
        Timeline = @(@{ At = 0; Sc = $Hot })
        Expect = @('\[TEST\] shutdown\.exe /s /f /t 10', 'kill stage 2 \(stubbed\)')
        Order = @('\[TEST\] shutdown\.exe', 'EMERGENCY SHUTDOWN \|') }
+
+    @{ Name = 'failsafe-shutdown-is-recorded'; Duration = 25; Exit = 'self'; GuardArgs = @()
+       Env = @{ TG_FS_STAGE2 = '2'; TG_FS_SHUTDOWN = '6' }; Timeline = @(@{ At = 0; Sc = (NewSc -Down) })
+       Expect = @('Data-loss fail-safe: blind for \d+s, SHUTDOWN', '\[TEST\] shutdown\.exe /s /f /t 10')
+       Forbid = @('Boot-loop breaker ACTIVE')
+       Check = { param($r) $f = Join-Path $LogDir 'failsafe-shutdowns.txt'
+                 if (-not (Test-Path $f)) { 'the fail-safe shutdown was not recorded in failsafe-shutdowns.txt' }
+                 elseif (@(Get-Content $f).Count -ne 1) { "expected 1 recorded shutdown, found $(@(Get-Content $f).Count)" } } }
+
+    @{ Name = 'failsafe-boot-loop-breaker-suppresses-the-shutdown'; Duration = 16; GuardArgs = @()
+       Env = @{ TG_FS_STAGE2 = '2'; TG_FS_SHUTDOWN = '6' }; Timeline = @(@{ At = 0; Sc = (NewSc -Down) })
+       Seed = { Set-Content -Path (Join-Path $LogDir 'failsafe-shutdowns.txt') -Value @((Get-Date).AddMinutes(-5).ToString('o'), (Get-Date).AddMinutes(-12).ToString('o')) -Encoding ASCII }
+       Expect = @('Boot-loop breaker ACTIVE', 'shutdown SUPPRESSED by the boot-loop breaker')
+       Forbid = @('\[TEST\] shutdown\.exe') }
+
+    @{ Name = 'failsafe-old-shutdowns-do-not-count'; Duration = 25; Exit = 'self'; GuardArgs = @()
+       Env = @{ TG_FS_STAGE2 = '2'; TG_FS_SHUTDOWN = '6' }; Timeline = @(@{ At = 0; Sc = (NewSc -Down) })
+       Seed = { Set-Content -Path (Join-Path $LogDir 'failsafe-shutdowns.txt') -Value @((Get-Date).AddHours(-3).ToString('o'), (Get-Date).AddHours(-4).ToString('o')) -Encoding ASCII }
+       Expect = @('\[TEST\] shutdown\.exe /s /f /t 10'); Forbid = @('Boot-loop breaker ACTIVE') }
+
+    @{ Name = 'failsafe-history-is-cleared-by-a-healthy-poll'; Duration = 8; GuardArgs = @(); Timeline = @(@{ At = 0; Sc = (NewSc) })
+       Seed = { Set-Content -Path (Join-Path $LogDir 'failsafe-shutdowns.txt') -Value @((Get-Date).AddMinutes(-5).ToString('o'), (Get-Date).AddMinutes(-12).ToString('o')) -Encoding ASCII }
+       Expect = @('Boot-loop breaker ACTIVE', 'HEALTHY: first successful sensor poll')
+       Check = { param($r) if (Test-Path (Join-Path $LogDir 'failsafe-shutdowns.txt')) { 'the history was not cleared by the healthy poll' } } }
 )
 
 # --- custom tests (need more than one process or no mock data) ---------------------
@@ -314,6 +361,104 @@ $Custom = @(
             if ($got -ne $c.want) { [void]$f.Add("$($c.n) / $($c.c): expected $($c.want), got $got") }
         }
         return $f } }
+
+    @{ Name = 'remotehwinfo-download-must-match-the-pinned-hash'; Run = {
+        $f = New-Object System.Collections.ArrayList
+        $tokens = $null; $errs = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($ScriptPath, [ref]$tokens, [ref]$errs)
+        foreach ($n in 'Find-Executable', 'Resolve-RemoteHWInfo') {
+            $fn = $ast.Find({ param($x) $x -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $x.Name -eq $n }, $true)
+            if (-not $fn) { [void]$f.Add("function $n not found"); return $f }
+            Invoke-Expression $fn.Extent.Text
+        }
+        $work = Join-Path $Root "rhw"
+        New-Item -ItemType Directory -Path $work -Force | Out-Null
+        # a ZIP that contains a believable RemoteHWInfo.exe (Find-Executable ignores files < 5000 bytes)
+        $good = Join-Path $work "good.zip"
+        $src  = Join-Path $work "src"; New-Item -ItemType Directory -Path $src -Force | Out-Null
+        [System.IO.File]::WriteAllBytes((Join-Path $src "RemoteHWInfo.exe"), (New-Object byte[] 9000))
+        if (Test-Path $good) { Remove-Item $good -Force }
+        Compress-Archive -Path (Join-Path $src "*") -DestinationPath $good
+        $goodHash = (Get-FileHash $good -Algorithm SHA256).Hash.ToLowerInvariant()
+
+        function Write-Log { param([string]$Message, [string]$Level = "INFO") $script:RhwLog += "[$Level] $Message`n" }
+        function Invoke-WebRequest { param($Uri, $OutFile, [switch]$UseBasicParsing, $TimeoutSec) Copy-Item -Path $good -Destination $OutFile -Force }
+        $RemoteHWInfoZipUrl = "https://example.invalid/RemoteHWInfo.zip"
+        $script:RemoteHWInfo_Path = $null
+
+        # 1) hash does not match -> refused, nothing unpacked
+        $ToolsDir = Join-Path $work "tools1"
+        $RemoteHWInfoZipSha256 = ("0" * 64)
+        $script:RhwLog = ""
+        $r1 = Resolve-RemoteHWInfo
+        if ($r1) { [void]$f.Add("a download with the wrong hash was accepted ($r1)") }
+        if (Get-ChildItem -Path $ToolsDir -Recurse -Filter "RemoteHWInfo.exe" -ErrorAction SilentlyContinue) { [void]$f.Add("the ZIP with the wrong hash was unpacked") }
+        if ($script:RhwLog -notmatch 'does not match the pinned hash') { [void]$f.Add("no log line about the hash mismatch") }
+
+        # 2) hash matches -> installed
+        $ToolsDir = Join-Path $work "tools2"
+        $RemoteHWInfoZipSha256 = $goodHash
+        $script:RhwLog = ""
+        $r2 = Resolve-RemoteHWInfo
+        if (-not $r2 -or $r2 -notmatch 'RemoteHWInfo\.exe$') { [void]$f.Add("a download with the correct hash was not installed (result: $r2)") }
+        if ($script:RhwLog -notmatch 'SHA-256 verified against the pinned value') { [void]$f.Add("no log line about the verified hash") }
+        return $f } }
+
+    @{ Name = 'exposure-check-flags-writable-folders-only'; Run = {
+        $f = New-Object System.Collections.ArrayList
+        $tokens = $null; $errs = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($ScriptPath, [ref]$tokens, [ref]$errs)
+        $fn = $ast.Find({ param($x) $x -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $x.Name -eq 'Get-WritableByStandardUsers' }, $true)
+        if (-not $fn) { [void]$f.Add("function Get-WritableByStandardUsers does not exist"); return $f }
+        Invoke-Expression $fn.Extent.Text
+        # a folder the current user owns can be rewritten by any non-elevated program of that user
+        $mine = Join-Path $Root "owned-by-me"; New-Item -ItemType Directory -Path $mine -Force | Out-Null
+        if (-not (Get-WritableByStandardUsers -Path $mine)) { [void]$f.Add("a folder owned by the current user was not flagged: $mine") }
+        foreach ($safe in @((Join-Path $env:SystemRoot 'System32'), $env:ProgramFiles)) {
+            $why = Get-WritableByStandardUsers -Path $safe
+            if ($why) { [void]$f.Add("$safe was flagged but is protected by default: $why") }
+        }
+        if (Get-WritableByStandardUsers -Path (Join-Path $Root "does-not-exist")) { [void]$f.Add("a missing path must not be flagged") }
+        return $f } }
+
+    # Regression test: "icacls <folder> /inheritance:r /grant:r ... /T" leaves every FILE with an
+    # empty permission list (unreadable, not startable). Protect-Folder must not do that.
+    @{ Name = 'protect-folder-keeps-the-files-usable'; Run = {
+        $f = New-Object System.Collections.ArrayList
+        $installer = Join-Path (Split-Path -Parent $PSScriptRoot) "Install-ScheduledTask.ps1"
+        $tokens = $null; $errs = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($installer, [ref]$tokens, [ref]$errs)
+        $fn = $ast.Find({ param($x) $x -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $x.Name -eq 'Protect-Folder' }, $true)
+        if (-not $fn) { [void]$f.Add("function Protect-Folder not found in Install-ScheduledTask.ps1"); return $f }
+        Invoke-Expression $fn.Extent.Text
+
+        $d = Join-Path $Root "protect-me"
+        New-Item -ItemType Directory -Path (Join-Path $d "sub") -Force | Out-Null
+        Set-Content -Path (Join-Path $d "tool.exe") -Value "x"
+        Set-Content -Path (Join-Path $d "sub\data.txt") -Value "y"
+        # the real-world starting point: an explicit full-control entry for the current user on the folder
+        $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+        $null = & icacls.exe $d /grant "${me}:(OI)(CI)F" 2>&1
+
+        $r = Protect-Folder -Path $d
+        if ($r.FilesWithEmptyAcl -ne 0) { [void]$f.Add("$($r.FilesWithEmptyAcl) file(s) were left with an EMPTY permission list") }
+        if (-not $r.PermissionsSet)     { [void]$f.Add("Protect-Folder reported that the permissions were not set") }
+        $adminsSid = 'S-1-5-32-544'; $usersSid = 'S-1-5-32-545'
+        foreach ($p in @($d, (Join-Path $d "tool.exe"), (Join-Path $d "sub\data.txt"))) {
+            $acl = Get-Acl -LiteralPath $p
+            $sids = @{}
+            foreach ($rule in $acl.Access) { $sids[$rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value] = $rule }
+            if (-not $sids.ContainsKey($adminsSid) -or ($sids[$adminsSid].FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl) -ne [System.Security.AccessControl.FileSystemRights]::FullControl) { [void]$f.Add("$p : Administrators do not have full control") }
+            if (-not $sids.ContainsKey($usersSid)) { [void]$f.Add("$p : Users have no read/execute entry") }
+            elseif (($sids[$usersSid].FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::WriteData) -ne 0) { [void]$f.Add("$p : Users can still write") }
+        }
+        # the explicit entry of the current user on the folder must be gone (only via Users/Administrators now)
+        $meSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+        foreach ($rule in (Get-Acl -LiteralPath $d).Access) {
+            if ($rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -eq $meSid) { [void]$f.Add("the explicit entry of the current user was not removed from the folder") }
+        }
+        try { $null = Get-Content -LiteralPath (Join-Path $d "tool.exe") -ErrorAction Stop } catch { [void]$f.Add("a file in the protected folder can no longer be read: $($_.Exception.Message)") }
+        return $f } }
 )
 
 # --- run ----------------------------------------------------------------------------
@@ -350,7 +495,7 @@ try {
         # ContainsKey, not truthiness: an explicit empty list means "real mode, no -DryRun".
         $args2 = if ($s.ContainsKey('GuardArgs')) { $s.GuardArgs } else { @('-DryRun') }
         $envs  = if ($s.Env) { $s.Env } else { @{} }
-        $res   = Invoke-Guard -Duration $s.Duration -Timeline $s.Timeline -EnvVars $envs -GuardArgs $args2
+        $res   = Invoke-Guard -Duration $s.Duration -Timeline $s.Timeline -EnvVars $envs -GuardArgs $args2 -Seed $s.Seed
         $fail  = Test-Result $res $s
         [void]$results.Add([pscustomobject]@{ Name = $s.Name; Failures = $fail; Log = $res.Log })
         if ($fail.Count -eq 0) { Write-Host "`r[PASS] $($s.Name)                                        " -ForegroundColor Green }
