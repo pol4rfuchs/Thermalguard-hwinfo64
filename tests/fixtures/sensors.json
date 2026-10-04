@@ -1,0 +1,1307 @@
+{
+ "hwinfo": {
+  "signature": 1399412552,
+  "version": 2,
+  "revision": 1,
+  "sensors": [
+   {
+    "entryIndex": 4,
+    "sensorId": 4026533121,
+    "sensorInst": 0,
+    "sensorNameOriginal": "CPU [#0]: AMD Ryzen 7 5800X3D: Enhanced",
+    "sensorNameUser": "CPU [#0]: AMD Ryzen 7 5800X3D: Enhanced"
+   },
+   {
+    "entryIndex": 10,
+    "sensorId": 3758104576,
+    "sensorInst": 0,
+    "sensorNameOriginal": "GPU [#0]: NVIDIA GeForce RTX 5070 Ti: ASUS PRIME GeForce RTX 5070 Ti GAMING OC",
+    "sensorNameUser": "GPU [#0]: NVIDIA GeForce RTX 5070 Ti: ASUS PRIME GeForce RTX 5070 Ti GAMING OC"
+   }
+  ],
+  "readings": [
+   {
+    "entryIndex": 125,
+    "readingType": 1,
+    "sensorIndex": 4,
+    "readingId": 16777216,
+    "labelOriginal": "CPU (Tctl/Tdie)",
+    "labelUser": "CPU (Tctl/Tdie)",
+    "unit": "\u00b0C",
+    "value": 64.25
+   },
+   {
+    "entryIndex": 126,
+    "readingType": 1,
+    "sensorIndex": 4,
+    "readingId": 16777219,
+    "labelOriginal": "CPU Die (average)",
+    "labelUser": "CPU-Geh\u00e4use (Durchschnitt)",
+    "unit": "\u00b0C",
+    "value": 59.109318
+   },
+   {
+    "entryIndex": 127,
+    "readingType": 1,
+    "sensorIndex": 4,
+    "readingId": 16777224,
+    "labelOriginal": "CPU CCD1 (Tdie)",
+    "labelUser": "CPU CCD1 (Tdie)",
+    "unit": "\u00b0C",
+    "value": 58.25
+   },
+   {
+    "entryIndex": 128,
+    "readingType": 1,
+    "sensorIndex": 4,
+    "readingId": 16777344,
+    "labelOriginal": "Core0 (CCD1)",
+    "labelUser": "Core0 (CCD1)",
+    "unit": "\u00b0C",
+    "value": 55.543056
+   },
+   {
+    "entryIndex": 129,
+    "readingType": 1,
+    "sensorIndex": 4,
+    "readingId": 16777345,
+    "labelOriginal": "Core1 (CCD1)",
+    "labelUser": "Core1 (CCD1)",
+    "unit": "\u00b0C",
+    "value": 54.50983
+   },
+   {
+    "entryIndex": 130,
+    "readingType": 1,
+    "sensorIndex": 4,
+    "readingId": 16777346,
+    "labelOriginal": "Core2 (CCD1)",
+    "labelUser": "Core2 (CCD1)",
+    "unit": "\u00b0C",
+    "value": 50.208065
+   },
+   {
+    "entryIndex": 131,
+    "readingType": 1,
+    "sensorIndex": 4,
+    "readingId": 16777347,
+    "labelOriginal": "Core3 (CCD1)",
+    "labelUser": "Core3 (CCD1)",
+    "unit": "\u00b0C",
+    "value": 56.038574
+   },
+   {
+    "entryIndex": 132,
+    "readingType": 1,
+    "sensorIndex": 4,
+    "readingId": 16777348,
+    "labelOriginal": "Core4 (CCD1)",
+    "labelUser": "Core4 (CCD1)",
+    "unit": "\u00b0C",
+    "value": 44.786213
+   },
+   {
+    "entryIndex": 133,
+    "readingType": 1,
+    "sensorIndex": 4,
+    "readingId": 16777349,
+    "labelOriginal": "Core5 (CCD1)",
+    "labelUser": "Core5 (CCD1)",
+    "unit": "\u00b0C",
+    "value": 44.467396
+   },
+   {
+    "entryIndex": 134,
+    "readingType": 1,
+    "sensorIndex": 4,
+    "readingId": 16777350,
+    "labelOriginal": "Core6 (CCD1)",
+    "labelUser": "Core6 (CCD1)",
+    "unit": "\u00b0C",
+    "value": 53.614235
+   },
+   {
+    "entryIndex": 135,
+    "readingType": 1,
+    "sensorIndex": 4,
+    "readingId": 16777351,
+    "labelOriginal": "Core7 (CCD1)",
+    "labelUser": "Core7 (CCD1)",
+    "unit": "\u00b0C",
+    "value": 44.055748
+   },
+   {
+    "entryIndex": 136,
+    "readingType": 1,
+    "sensorIndex": 4,
+    "readingId": 16777440,
+    "labelOriginal": "L3 Cache (CCD1)",
+    "labelUser": "L3 Cache (CCD1)",
+    "unit": "\u00b0C",
+    "value": 40.480461
+   },
+   {
+    "entryIndex": 137,
+    "readingType": 1,
+    "sensorIndex": 4,
+    "readingId": 16777464,
+    "labelOriginal": "CPU IOD Hotspot",
+    "labelUser": "CPU IOD Hotspot",
+    "unit": "\u00b0C",
+    "value": 27.996765
+   },
+   {
+    "entryIndex": 138,
+    "readingType": 2,
+    "sensorIndex": 4,
+    "readingId": 33554432,
+    "labelOriginal": "CPU Core Voltage (SVI2 TFN)",
+    "labelUser": "CPU-Kernspannung (SVI2 TFN)",
+    "unit": "V",
+    "value": 1.275
+   },
+   {
+    "entryIndex": 139,
+    "readingType": 2,
+    "sensorIndex": 4,
+    "readingId": 33554433,
+    "labelOriginal": "SoC Voltage (SVI2 TFN)",
+    "labelUser": "SoC Spannung (SVI2 TFN)",
+    "unit": "V",
+    "value": 1.0125
+   },
+   {
+    "entryIndex": 140,
+    "readingType": 2,
+    "sensorIndex": 4,
+    "readingId": 33554434,
+    "labelOriginal": "CPU Core VID (Effective)",
+    "labelUser": "CPU Core VID (Effective)",
+    "unit": "V",
+    "value": 1.29375
+   },
+   {
+    "entryIndex": 141,
+    "readingType": 4,
+    "sensorIndex": 4,
+    "readingId": 67108864,
+    "labelOriginal": "CPU Core Current (SVI2 TFN)",
+    "labelUser": "CPU-Kernstrom (SVI2 TFN)",
+    "unit": "A",
+    "value": 30.368057
+   },
+   {
+    "entryIndex": 142,
+    "readingType": 4,
+    "sensorIndex": 4,
+    "readingId": 67108865,
+    "labelOriginal": "SoC Current (SVI2 TFN)",
+    "labelUser": "SoC-Strom (SVI2 TFN)",
+    "unit": "A",
+    "value": 4.11723
+   },
+   {
+    "entryIndex": 143,
+    "readingType": 4,
+    "sensorIndex": 4,
+    "readingId": 67108866,
+    "labelOriginal": "CPU TDC",
+    "labelUser": "CPU TDC",
+    "unit": "A",
+    "value": 30.373577
+   },
+   {
+    "entryIndex": 144,
+    "readingType": 4,
+    "sensorIndex": 4,
+    "readingId": 67108867,
+    "labelOriginal": "CPU EDC",
+    "labelUser": "CPU EDC",
+    "unit": "A",
+    "value": 62.610634
+   },
+   {
+    "entryIndex": 145,
+    "readingType": 5,
+    "sensorIndex": 4,
+    "readingId": 83886080,
+    "labelOriginal": "CPU Package Power",
+    "labelUser": "CPU-Gesamt-Leistungsaufnahme",
+    "unit": "W",
+    "value": 55.382545
+   },
+   {
+    "entryIndex": 146,
+    "readingType": 5,
+    "sensorIndex": 4,
+    "readingId": 83886081,
+    "labelOriginal": "Core 0 Power",
+    "labelUser": "Core 0 Leistung",
+    "unit": "W",
+    "value": 8.366535
+   },
+   {
+    "entryIndex": 147,
+    "readingType": 5,
+    "sensorIndex": 4,
+    "readingId": 83886082,
+    "labelOriginal": "Core 1 Power",
+    "labelUser": "Core 1 Leistung",
+    "unit": "W",
+    "value": 7.651854
+   },
+   {
+    "entryIndex": 148,
+    "readingType": 5,
+    "sensorIndex": 4,
+    "readingId": 83886083,
+    "labelOriginal": "Core 2 Power",
+    "labelUser": "Core 2 Leistung",
+    "unit": "W",
+    "value": 4.471492
+   },
+   {
+    "entryIndex": 149,
+    "readingType": 5,
+    "sensorIndex": 4,
+    "readingId": 83886084,
+    "labelOriginal": "Core 3 Power",
+    "labelUser": "Core 3 Leistung",
+    "unit": "W",
+    "value": 8.407492
+   },
+   {
+    "entryIndex": 150,
+    "readingType": 5,
+    "sensorIndex": 4,
+    "readingId": 83886085,
+    "labelOriginal": "Core 4 Power",
+    "labelUser": "Core 4 Leistung",
+    "unit": "W",
+    "value": 2.369906
+   },
+   {
+    "entryIndex": 151,
+    "readingType": 5,
+    "sensorIndex": 4,
+    "readingId": 83886086,
+    "labelOriginal": "Core 5 Power",
+    "labelUser": "Core 5 Leistung",
+    "unit": "W",
+    "value": 2.421811
+   },
+   {
+    "entryIndex": 152,
+    "readingType": 5,
+    "sensorIndex": 4,
+    "readingId": 83886087,
+    "labelOriginal": "Core 6 Power",
+    "labelUser": "Core 6 Leistung",
+    "unit": "W",
+    "value": 6.321306
+   },
+   {
+    "entryIndex": 153,
+    "readingType": 5,
+    "sensorIndex": 4,
+    "readingId": 83886088,
+    "labelOriginal": "Core 7 Power",
+    "labelUser": "Core 7 Leistung",
+    "unit": "W",
+    "value": 3.071807
+   },
+   {
+    "entryIndex": 154,
+    "readingType": 5,
+    "sensorIndex": 4,
+    "readingId": 83886089,
+    "labelOriginal": "CPU Core Power (SVI2 TFN)",
+    "labelUser": "CPU Kern-Leistung (SVI2 TFN)",
+    "unit": "W",
+    "value": 38.165241
+   },
+   {
+    "entryIndex": 155,
+    "readingType": 5,
+    "sensorIndex": 4,
+    "readingId": 83886090,
+    "labelOriginal": "CPU SoC Power (SVI2 TFN)",
+    "labelUser": "CPU-SoC-Leistung (SVI2 TFN)",
+    "unit": "W",
+    "value": 4.153409
+   },
+   {
+    "entryIndex": 156,
+    "readingType": 5,
+    "sensorIndex": 4,
+    "readingId": 83886091,
+    "labelOriginal": "Core+SoC Power (SVI2 TFN)",
+    "labelUser": "Core+SoC Leistung (SVI2 TFN)",
+    "unit": "W",
+    "value": 42.318649
+   },
+   {
+    "entryIndex": 157,
+    "readingType": 5,
+    "sensorIndex": 4,
+    "readingId": 83886092,
+    "labelOriginal": "CPU PPT",
+    "labelUser": "CPU PPT",
+    "unit": "W",
+    "value": 54.117466
+   },
+   {
+    "entryIndex": 158,
+    "readingType": 6,
+    "sensorIndex": 4,
+    "readingId": 100663296,
+    "labelOriginal": "Infinity Fabric Clock (FCLK)",
+    "labelUser": "Infinity Fabric Takt (FCLK)",
+    "unit": "MHz",
+    "value": 1796.76001
+   },
+   {
+    "entryIndex": 159,
+    "readingType": 6,
+    "sensorIndex": 4,
+    "readingId": 100663297,
+    "labelOriginal": "Memory Controller Clock (UCLK)",
+    "labelUser": "Takt des Speicher-Controllers (UCLK)",
+    "unit": "MHz",
+    "value": 1796.76001
+   },
+   {
+    "entryIndex": 160,
+    "readingType": 6,
+    "sensorIndex": 4,
+    "readingId": 100663300,
+    "labelOriginal": "L3 Cache (CCD1)",
+    "labelUser": "L3 Cache (CCD1)",
+    "unit": "MHz",
+    "value": 4439.101219
+   },
+   {
+    "entryIndex": 161,
+    "readingType": 6,
+    "sensorIndex": 4,
+    "readingId": 100663333,
+    "labelOriginal": "Frequency Limit - Global",
+    "labelUser": "Frequenzgrenzwert - Global",
+    "unit": "MHz",
+    "value": 4439.11314
+   },
+   {
+    "entryIndex": 162,
+    "readingType": 7,
+    "sensorIndex": 4,
+    "readingId": 117440512,
+    "labelOriginal": "CPU PPT Limit",
+    "labelUser": "CPU PPT Limit",
+    "unit": "%",
+    "value": 38.110892
+   },
+   {
+    "entryIndex": 163,
+    "readingType": 7,
+    "sensorIndex": 4,
+    "readingId": 117440513,
+    "labelOriginal": "CPU TDC Limit",
+    "labelUser": "CPU TDC-Grenzwert",
+    "unit": "%",
+    "value": 31.972186
+   },
+   {
+    "entryIndex": 164,
+    "readingType": 7,
+    "sensorIndex": 4,
+    "readingId": 117440515,
+    "labelOriginal": "CPU EDC Limit",
+    "labelUser": "CPU EDC-Grenzwert",
+    "unit": "%",
+    "value": 44.721881
+   },
+   {
+    "entryIndex": 165,
+    "readingType": 7,
+    "sensorIndex": 4,
+    "readingId": 117440523,
+    "labelOriginal": "Thermal Limit",
+    "labelUser": "Thermal Limit",
+    "unit": "%",
+    "value": 65.677017
+   },
+   {
+    "entryIndex": 166,
+    "readingType": 7,
+    "sensorIndex": 4,
+    "readingId": 117440532,
+    "labelOriginal": "Power Reporting Deviation (Accuracy)",
+    "labelUser": "Abweichung der Stromverbrauchs-Berichterstattung (Genauigkeit)",
+    "unit": "%",
+    "value": 88.587025
+   },
+   {
+    "entryIndex": 167,
+    "readingType": 8,
+    "sensorIndex": 4,
+    "readingId": 134217728,
+    "labelOriginal": "Thermal Throttling (HTC)",
+    "labelUser": "Thermische Drosselung (HTC)",
+    "unit": "Yes/No",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 168,
+    "readingType": 8,
+    "sensorIndex": 4,
+    "readingId": 134217729,
+    "labelOriginal": "Thermal Throttling (PROCHOT CPU)",
+    "labelUser": "Thermische Drosselung (PROCHOT CPU)",
+    "unit": "Yes/No",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 169,
+    "readingType": 8,
+    "sensorIndex": 4,
+    "readingId": 134217730,
+    "labelOriginal": "Thermal Throttling (PROCHOT EXT)",
+    "labelUser": "Thermische Drosselung (PROCHOT EXT)",
+    "unit": "Yes/No",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 170,
+    "readingType": 8,
+    "sensorIndex": 4,
+    "readingId": 134217735,
+    "labelOriginal": "DRAM Read Bandwidth",
+    "labelUser": "DRAM-Lesebandbreite",
+    "unit": "GB/s",
+    "value": 1.066788
+   },
+   {
+    "entryIndex": 171,
+    "readingType": 8,
+    "sensorIndex": 4,
+    "readingId": 134217736,
+    "labelOriginal": "DRAM Write Bandwidth",
+    "labelUser": "DRAM-Schreibbandbreite",
+    "unit": "GB/s",
+    "value": 0.550723
+   },
+   {
+    "entryIndex": 172,
+    "readingType": 8,
+    "sensorIndex": 4,
+    "readingId": 134217739,
+    "labelOriginal": "Average Active Core Count",
+    "labelUser": "Durchschnittliche Anzahl aktiver Kerne",
+    "unit": "",
+    "value": 4.006656
+   },
+   {
+    "entryIndex": 203,
+    "readingType": 1,
+    "sensorIndex": 10,
+    "readingId": 16777216,
+    "labelOriginal": "GPU Temperature",
+    "labelUser": "GPU-Temperatur",
+    "unit": "\u00b0C",
+    "value": 30.5625
+   },
+   {
+    "entryIndex": 204,
+    "readingType": 1,
+    "sensorIndex": 10,
+    "readingId": 16777220,
+    "labelOriginal": "GPU Memory Junction Temperature",
+    "labelUser": "GPU-Speicher Sperrschicht-Temperatur",
+    "unit": "\u00b0C",
+    "value": 38.0
+   },
+   {
+    "entryIndex": 205,
+    "readingType": 2,
+    "sensorIndex": 10,
+    "readingId": 33554432,
+    "labelOriginal": "GPU Core Voltage",
+    "labelUser": "GPU-Kern-Spannung",
+    "unit": "V",
+    "value": 0.8
+   },
+   {
+    "entryIndex": 206,
+    "readingType": 2,
+    "sensorIndex": 10,
+    "readingId": 33554434,
+    "labelOriginal": "GPU PCIe +12V Input Voltage",
+    "labelUser": "GPU PCIe +12V Eingangsspannung",
+    "unit": "V",
+    "value": 12.18366
+   },
+   {
+    "entryIndex": 207,
+    "readingType": 2,
+    "sensorIndex": 10,
+    "readingId": 33554435,
+    "labelOriginal": "GPU 12VHPWR Voltage",
+    "labelUser": "GPU 12VHPWR Spannung",
+    "unit": "V",
+    "value": 12.167797
+   },
+   {
+    "entryIndex": 208,
+    "readingType": 2,
+    "sensorIndex": 10,
+    "readingId": 33554445,
+    "labelOriginal": "GPU Unknown Rail (10) Voltage",
+    "labelUser": "Unbekannte GPU-Leitung (10) Spannung",
+    "unit": "V",
+    "value": 0.8
+   },
+   {
+    "entryIndex": 209,
+    "readingType": 3,
+    "sensorIndex": 10,
+    "readingId": 50331648,
+    "labelOriginal": "GPU Fan1",
+    "labelUser": "GPU L\u00fcfter1",
+    "unit": "RPM",
+    "value": 598.0
+   },
+   {
+    "entryIndex": 210,
+    "readingType": 3,
+    "sensorIndex": 10,
+    "readingId": 50331649,
+    "labelOriginal": "GPU Fan2",
+    "labelUser": "GPU L\u00fcfter2",
+    "unit": "RPM",
+    "value": 902.0
+   },
+   {
+    "entryIndex": 211,
+    "readingType": 5,
+    "sensorIndex": 10,
+    "readingId": 83886080,
+    "labelOriginal": "GPU Power",
+    "labelUser": "GPU Leistung",
+    "unit": "W",
+    "value": 10.326
+   },
+   {
+    "entryIndex": 212,
+    "readingType": 5,
+    "sensorIndex": 10,
+    "readingId": 83886082,
+    "labelOriginal": "GPU PCIe +12V Input Power",
+    "labelUser": "GPU PCIe +12V Eingangsleistung",
+    "unit": "W",
+    "value": 3.545445
+   },
+   {
+    "entryIndex": 213,
+    "readingType": 5,
+    "sensorIndex": 10,
+    "readingId": 83886083,
+    "labelOriginal": "GPU 12VHPWR Power",
+    "labelUser": "GPU 12VHPWR Leistung",
+    "unit": "W",
+    "value": 8.030746
+   },
+   {
+    "entryIndex": 214,
+    "readingType": 5,
+    "sensorIndex": 10,
+    "readingId": 83886084,
+    "labelOriginal": "GPU Unknown Rail (D6) Power (sum)",
+    "labelUser": "Unbekannte GPU-Leitung (D6) Leistung (sum)",
+    "unit": "W",
+    "value": 7.195395
+   },
+   {
+    "entryIndex": 215,
+    "readingType": 5,
+    "sensorIndex": 10,
+    "readingId": 83886085,
+    "labelOriginal": "GPU Core (NVVDD) Input Power (sum)",
+    "labelUser": "GPU Core (NVVDD) Eingangsleistung (sum)",
+    "unit": "W",
+    "value": 4.463584
+   },
+   {
+    "entryIndex": 216,
+    "readingType": 5,
+    "sensorIndex": 10,
+    "readingId": 83886086,
+    "labelOriginal": "GPU Unknown Rail (D4) Power (sum)",
+    "labelUser": "Unbekannte GPU-Leitung (D4) Leistung (sum)",
+    "unit": "W",
+    "value": 2.731
+   },
+   {
+    "entryIndex": 217,
+    "readingType": 5,
+    "sensorIndex": 10,
+    "readingId": 83886088,
+    "labelOriginal": "GPU Misc0 Input Power (sum)",
+    "labelUser": "GPU Misc0 Eingangsleistung (sum)",
+    "unit": "W",
+    "value": 4.403
+   },
+   {
+    "entryIndex": 218,
+    "readingType": 5,
+    "sensorIndex": 10,
+    "readingId": 83886092,
+    "labelOriginal": "GPU Unknown Rail (D) Power (sum)",
+    "labelUser": "Unbekannte GPU-Leitung (D) Leistung (sum)",
+    "unit": "W",
+    "value": 1.365
+   },
+   {
+    "entryIndex": 219,
+    "readingType": 5,
+    "sensorIndex": 10,
+    "readingId": 83886093,
+    "labelOriginal": "GPU Unknown Rail (10) Power",
+    "labelUser": "Unbekannte GPU-Leitung (10) Leistung",
+    "unit": "W",
+    "value": 0.2528
+   },
+   {
+    "entryIndex": 220,
+    "readingType": 5,
+    "sensorIndex": 10,
+    "readingId": 83886094,
+    "labelOriginal": "GPU Core (NVVDD) Output Power",
+    "labelUser": "GPU Core (NVVDD) Ausgangsleistung",
+    "unit": "W",
+    "value": 1.112
+   },
+   {
+    "entryIndex": 221,
+    "readingType": 5,
+    "sensorIndex": 10,
+    "readingId": 83886095,
+    "labelOriginal": "GPU Core (NVVDD) Output Power",
+    "labelUser": "GPU Core (NVVDD) Ausgangsleistung",
+    "unit": "W",
+    "value": 1.112
+   },
+   {
+    "entryIndex": 222,
+    "readingType": 5,
+    "sensorIndex": 10,
+    "readingId": 83886144,
+    "labelOriginal": "GPU Power Limit (rated)",
+    "labelUser": "GPU Leistung Limit (rated)",
+    "unit": "W",
+    "value": 300.0
+   },
+   {
+    "entryIndex": 223,
+    "readingType": 5,
+    "sensorIndex": 10,
+    "readingId": 83886145,
+    "labelOriginal": "GPU Power Limit (max)",
+    "labelUser": "GPU Leistung Limit (max)",
+    "unit": "W",
+    "value": 350.0
+   },
+   {
+    "entryIndex": 224,
+    "readingType": 6,
+    "sensorIndex": 10,
+    "readingId": 100663296,
+    "labelOriginal": "GPU Clock",
+    "labelUser": "GPU-Takt",
+    "unit": "MHz",
+    "value": 285.0
+   },
+   {
+    "entryIndex": 225,
+    "readingType": 6,
+    "sensorIndex": 10,
+    "readingId": 100663300,
+    "labelOriginal": "GPU Memory Clock",
+    "labelUser": "GPU Speicher-Takt",
+    "unit": "MHz",
+    "value": 50.625
+   },
+   {
+    "entryIndex": 226,
+    "readingType": 6,
+    "sensorIndex": 10,
+    "readingId": 100663301,
+    "labelOriginal": "GPU Video Clock",
+    "labelUser": "GPU-Videotakt",
+    "unit": "MHz",
+    "value": 675.0
+   },
+   {
+    "entryIndex": 227,
+    "readingType": 6,
+    "sensorIndex": 10,
+    "readingId": 100663302,
+    "labelOriginal": "GPU Effective Clock",
+    "labelUser": "GPU Effektiver Takt",
+    "unit": "MHz",
+    "value": 34.4
+   },
+   {
+    "entryIndex": 228,
+    "readingType": 6,
+    "sensorIndex": 10,
+    "readingId": 100663303,
+    "labelOriginal": "GPU Crossbar Clock",
+    "labelUser": "GPU Crossbar Takt",
+    "unit": "MHz",
+    "value": 952.0
+   },
+   {
+    "entryIndex": 229,
+    "readingType": 7,
+    "sensorIndex": 10,
+    "readingId": 117440512,
+    "labelOriginal": "GPU Core Load",
+    "labelUser": "GPU Kernlast",
+    "unit": "%",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 230,
+    "readingType": 7,
+    "sensorIndex": 10,
+    "readingId": 117440513,
+    "labelOriginal": "GPU Memory Controller Load",
+    "labelUser": "Auslastung des GPU Speicher-Controllers",
+    "unit": "%",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 231,
+    "readingType": 7,
+    "sensorIndex": 10,
+    "readingId": 117440514,
+    "labelOriginal": "GPU Video Engine Load",
+    "labelUser": "GPU Video-Engine-Last",
+    "unit": "%",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 232,
+    "readingType": 7,
+    "sensorIndex": 10,
+    "readingId": 117440515,
+    "labelOriginal": "GPU Bus Load",
+    "labelUser": "GPU-Buslast",
+    "unit": "%",
+    "value": 12.0
+   },
+   {
+    "entryIndex": 233,
+    "readingType": 7,
+    "sensorIndex": 10,
+    "readingId": 117440520,
+    "labelOriginal": "GPU Memory Usage",
+    "labelUser": "GPU Speichernutzung",
+    "unit": "%",
+    "value": 7.883926
+   },
+   {
+    "entryIndex": 234,
+    "readingType": 7,
+    "sensorIndex": 10,
+    "readingId": 117440521,
+    "labelOriginal": "GPU D3D Usage",
+    "labelUser": "GPU D3D-Auslastung",
+    "unit": "%",
+    "value": 0.610719
+   },
+   {
+    "entryIndex": 235,
+    "readingType": 7,
+    "sensorIndex": 10,
+    "readingId": 117440522,
+    "labelOriginal": "GPU Video Decode 0 Usage",
+    "labelUser": "GPU Video Decode 0 Auslastung",
+    "unit": "%",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 236,
+    "readingType": 7,
+    "sensorIndex": 10,
+    "readingId": 117440532,
+    "labelOriginal": "GPU Video Encode 0 Usage",
+    "labelUser": "GPU Video Encode 0 Auslastung",
+    "unit": "%",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 237,
+    "readingType": 7,
+    "sensorIndex": 10,
+    "readingId": 117440533,
+    "labelOriginal": "GPU Video Encode 1 Usage",
+    "labelUser": "GPU Video Encode 1 Auslastung",
+    "unit": "%",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 238,
+    "readingType": 7,
+    "sensorIndex": 10,
+    "readingId": 117440552,
+    "labelOriginal": "GPU VR Usage",
+    "labelUser": "GPU VR Auslastung",
+    "unit": "%",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 239,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217728,
+    "labelOriginal": "GPU Fan1",
+    "labelUser": "GPU L\u00fcfter1",
+    "unit": "%",
+    "value": 30.0
+   },
+   {
+    "entryIndex": 240,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217729,
+    "labelOriginal": "GPU Fan2",
+    "labelUser": "GPU L\u00fcfter2",
+    "unit": "%",
+    "value": 40.0
+   },
+   {
+    "entryIndex": 241,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217738,
+    "labelOriginal": "Performance Limit - Power",
+    "labelUser": "Leistungsgrenzwert - Leistung",
+    "unit": "Yes/No",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 242,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217739,
+    "labelOriginal": "Performance Limit - Thermal",
+    "labelUser": "Leistungsgrenzwert - Thermisch",
+    "unit": "Yes/No",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 243,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217740,
+    "labelOriginal": "Performance Limit - Reliability Voltage",
+    "labelUser": "Leistungsgrenzwert - Spannungs-Zuverl\u00e4ssigkeit",
+    "unit": "Yes/No",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 244,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217741,
+    "labelOriginal": "Performance Limit - Max Operating Voltage",
+    "labelUser": "Leistungsgrenzwert - Max. Betriebsspannung",
+    "unit": "Yes/No",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 245,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217742,
+    "labelOriginal": "Performance Limit - Utilization",
+    "labelUser": "Leistungsgrenzwert - Auslastung",
+    "unit": "Yes/No",
+    "value": 1.0
+   },
+   {
+    "entryIndex": 246,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217743,
+    "labelOriginal": "Performance Limit - SLI GPUBoost Sync",
+    "labelUser": "Leistungsgrenzwert - SLI GPUBoost Sync",
+    "unit": "Yes/No",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 247,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217792,
+    "labelOriginal": "Total GPU Power [% of TDP]",
+    "labelUser": "Gesamte GPU-Leistung [% von TDP]",
+    "unit": "%",
+    "value": 3.866
+   },
+   {
+    "entryIndex": 248,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217793,
+    "labelOriginal": "Total GPU Power (normalized) [% of TDP]",
+    "labelUser": "Gesamte GPU-Leistung (normalisiert) [% von TDP]",
+    "unit": "%",
+    "value": 3.993
+   },
+   {
+    "entryIndex": 249,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217856,
+    "labelOriginal": "Receiver Errors",
+    "labelUser": "Receiver Errors",
+    "unit": "",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 250,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217857,
+    "labelOriginal": "Replay Count",
+    "labelUser": "Replay Count",
+    "unit": "",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 251,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217858,
+    "labelOriginal": "Replay Rollover Count",
+    "labelUser": "Replay Rollover Count",
+    "unit": "",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 252,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217859,
+    "labelOriginal": "Bad DLLP Count",
+    "labelUser": "Bad DLLP Count",
+    "unit": "",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 253,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217860,
+    "labelOriginal": "Bad TLP Count",
+    "labelUser": "Bad TLP Count",
+    "unit": "",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 254,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217861,
+    "labelOriginal": "LCRC Error Count",
+    "labelUser": "LCRC Error Count",
+    "unit": "",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 255,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217862,
+    "labelOriginal": "NAKs Sent Count",
+    "labelUser": "NAKs Sent Count",
+    "unit": "",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 256,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217863,
+    "labelOriginal": "NAKs Received Count",
+    "labelUser": "NAKs Received Count",
+    "unit": "",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 257,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217864,
+    "labelOriginal": "Recovery Count",
+    "labelUser": "Recovery Count",
+    "unit": "",
+    "value": 84.0
+   },
+   {
+    "entryIndex": 258,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217865,
+    "labelOriginal": "Correctable Error Count",
+    "labelUser": "Correctable Error Count",
+    "unit": "",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 259,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217866,
+    "labelOriginal": "Non-Fatal Error Count",
+    "labelUser": "Non-Fatal Error Count",
+    "unit": "",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 260,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217867,
+    "labelOriginal": "Fatal Error Count",
+    "labelUser": "Fatal Error Count",
+    "unit": "",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 261,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217868,
+    "labelOriginal": "Unsupported Request Count",
+    "labelUser": "Unsupported Request Count",
+    "unit": "",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 262,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217869,
+    "labelOriginal": "PCIe Lane 0 Errors",
+    "labelUser": "PCIe Lane 0 Errors",
+    "unit": "",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 263,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217870,
+    "labelOriginal": "PCIe Lane 1 Errors",
+    "labelUser": "PCIe Lane 1 Errors",
+    "unit": "",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 264,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217871,
+    "labelOriginal": "PCIe Lane 2 Errors",
+    "labelUser": "PCIe Lane 2 Errors",
+    "unit": "",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 265,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217872,
+    "labelOriginal": "PCIe Lane 3 Errors",
+    "labelUser": "PCIe Lane 3 Errors",
+    "unit": "",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 266,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217873,
+    "labelOriginal": "PCIe Lane 4 Errors",
+    "labelUser": "PCIe Lane 4 Errors",
+    "unit": "",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 267,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217874,
+    "labelOriginal": "PCIe Lane 5 Errors",
+    "labelUser": "PCIe Lane 5 Errors",
+    "unit": "",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 268,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217875,
+    "labelOriginal": "PCIe Lane 6 Errors",
+    "labelUser": "PCIe Lane 6 Errors",
+    "unit": "",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 269,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217876,
+    "labelOriginal": "PCIe Lane 7 Errors",
+    "labelUser": "PCIe Lane 7 Errors",
+    "unit": "",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 270,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217877,
+    "labelOriginal": "PCIe Lane 8 Errors",
+    "labelUser": "PCIe Lane 8 Errors",
+    "unit": "",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 271,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217878,
+    "labelOriginal": "PCIe Lane 9 Errors",
+    "labelUser": "PCIe Lane 9 Errors",
+    "unit": "",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 272,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217879,
+    "labelOriginal": "PCIe Lane 10 Errors",
+    "labelUser": "PCIe Lane 10 Errors",
+    "unit": "",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 273,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217880,
+    "labelOriginal": "PCIe Lane 11 Errors",
+    "labelUser": "PCIe Lane 11 Errors",
+    "unit": "",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 274,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217881,
+    "labelOriginal": "PCIe Lane 12 Errors",
+    "labelUser": "PCIe Lane 12 Errors",
+    "unit": "",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 275,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217882,
+    "labelOriginal": "PCIe Lane 13 Errors",
+    "labelUser": "PCIe Lane 13 Errors",
+    "unit": "",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 276,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217883,
+    "labelOriginal": "PCIe Lane 14 Errors",
+    "labelUser": "PCIe Lane 14 Errors",
+    "unit": "",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 277,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217884,
+    "labelOriginal": "PCIe Lane 15 Errors",
+    "labelUser": "PCIe Lane 15 Errors",
+    "unit": "",
+    "value": 0.0
+   },
+   {
+    "entryIndex": 278,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217979,
+    "labelOriginal": "GPU Memory Available",
+    "labelUser": "Verf\u00fcgbarer GPU-Speicher",
+    "unit": "MB",
+    "value": 15017.683594
+   },
+   {
+    "entryIndex": 279,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217980,
+    "labelOriginal": "GPU Memory Allocated",
+    "labelUser": "Zugeteilter GPU-Speicher",
+    "unit": "MB",
+    "value": 1285.316406
+   },
+   {
+    "entryIndex": 280,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217981,
+    "labelOriginal": "GPU D3D Memory Dedicated",
+    "labelUser": "GPU D3D-Speicher dediziert",
+    "unit": "MB",
+    "value": 988.925781
+   },
+   {
+    "entryIndex": 281,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217982,
+    "labelOriginal": "GPU D3D Memory Dynamic",
+    "labelUser": "GPU D3D-Speicher dynamisch",
+    "unit": "MB",
+    "value": 57.167969
+   },
+   {
+    "entryIndex": 282,
+    "readingType": 8,
+    "sensorIndex": 10,
+    "readingId": 134217983,
+    "labelOriginal": "PCIe Link Speed",
+    "labelUser": "PCIe-Link-Geschwindigkeit",
+    "unit": "GT/s",
+    "value": 2.5
+   }
+  ],
+  "sensorCount": 2,
+  "readingCount": 128
+ }
+}

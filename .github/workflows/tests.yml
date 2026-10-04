@@ -1,0 +1,39 @@
+---
+name: Behavior Tests
+
+# Runs tests/Run-Tests.ps1: the real script against a mock sensor endpoint
+# (Stage 2/3, data-loss fail-safe, sensor lookup, update installer ...). Runs on
+# both PowerShell editions, because the script has to work on Windows
+# PowerShell 5.1 as well as on PowerShell 7.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  test:
+    name: Behavior tests (${{ matrix.shell }})
+    runs-on: windows-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [pwsh, powershell]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Run behavior tests
+        shell: ${{ matrix.shell }}
+        run: ./tests/Run-Tests.ps1
