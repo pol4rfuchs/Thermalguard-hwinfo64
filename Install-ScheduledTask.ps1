@@ -223,7 +223,7 @@ function Get-WritableByStandardUsers {
 function Protect-Folder {
     # Administrators + SYSTEM full control, Users read/execute, no inherited entries,
     # owner = Administrators. Uses well-known SIDs, so it is language independent.
-    param([string]$Path)
+    param([string]$Path, [string]$RequiredFile)
 
     # This script runs with $ErrorActionPreference = "Stop". In Windows PowerShell 5.1 that
     # turns ANY stderr line of a native command captured with 2>&1 (icacls prints
@@ -235,6 +235,13 @@ function Protect-Folder {
     if ($full.Length -le 3) { throw "Refusing to change the permissions of a drive root: $Path" }
     if ($env:SystemRoot -and $full.StartsWith($env:SystemRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "Refusing to change the permissions of a folder inside the Windows directory: $Path"
+    }
+    # The ACL reset below is recursive (icacls /reset /T). Only a folder that really
+    # is the program's own folder may be changed: it must contain the program file
+    # it was picked for. This keeps a wrong path (C:\Tools itself, a user profile,
+    # a folder that merely contains the scripts somewhere deeper) from being reset.
+    if (-not $RequiredFile -or -not (Test-Path -LiteralPath (Join-Path $full $RequiredFile) -PathType Leaf)) {
+        throw "Refusing to change the permissions of '$Path': it does not directly contain '$RequiredFile'"
     }
 
     # 1) The folder itself: no inheritance and ONLY these three entries. Every other
@@ -279,12 +286,12 @@ try {
     Write-Host "--- Permission check (this task runs these folders with administrator rights) ---" -ForegroundColor Cyan
     $toolsDir = "C:\Tools"
     $targets  = New-Object System.Collections.ArrayList
-    [void]$targets.Add([pscustomobject]@{ Path = $ScriptDir; Fix = $true; What = "ThermalGuard scripts" })
+    [void]$targets.Add([pscustomobject]@{ Path = $ScriptDir; Fix = $true; What = "ThermalGuard scripts"; Marker = "HWiNFO-ThermalGuard.ps1" })
     if (Test-Path -LiteralPath $toolsDir) {
         foreach ($spec in @(@('RemoteHWInfo.exe', $true), @('fipha.exe', $true), @('HWiNFO64.exe', $false))) {
             Get-ChildItem -LiteralPath $toolsDir -Filter $spec[0] -Recurse -Depth 3 -ErrorAction SilentlyContinue |
                 Where-Object { $_.FullName -notmatch '\\WindowsApps\\' } |
-                ForEach-Object { [void]$targets.Add([pscustomobject]@{ Path = $_.DirectoryName; Fix = $spec[1]; What = $_.Name }) }
+                ForEach-Object { [void]$targets.Add([pscustomobject]@{ Path = $_.DirectoryName; Fix = $spec[1]; What = $_.Name; Marker = $_.Name }) }
         }
     }
 
@@ -327,7 +334,12 @@ try {
                 Write-Host "Cancelled. Nothing was changed." -ForegroundColor Yellow
             } else {
                 foreach ($f in $fixable) {
-                    $r = Protect-Folder -Path $f.Path
+                    try {
+                        $r = Protect-Folder -Path $f.Path -RequiredFile $f.Marker
+                    } catch {
+                        Write-Host "  [SKIPPED] $($f.Path): $($_.Exception.Message)" -ForegroundColor Yellow
+                        continue
+                    }
                     if ($r.PermissionsSet -and $r.OwnerSet) { Write-Host "  [done]  $($r.Path)" -ForegroundColor Green }
                     else { Write-Host "  [PARTIAL] $($r.Path): permissions set = $($r.PermissionsSet), owner set = $($r.OwnerSet) (the owner change needs an elevated prompt)" -ForegroundColor Yellow }
                     if ($r.FilesWithEmptyAcl -gt 0) {

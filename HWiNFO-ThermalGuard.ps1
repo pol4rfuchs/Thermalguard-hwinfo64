@@ -54,7 +54,13 @@ if (-not [double]::IsNaN($SimulateTemp)) { $DryRun = [switch]$true }
 # verification of downloads), data-loss fail-safe, GPU Fan2, temperature unit
 # filter, -DryRun / -SimulateTemp, ntfy auth, log retention, Tls11 removed,
 # fipha off by default. See README.
-$ScriptVersion = "1.53"
+#
+# v1.54: audit fixes. Write-Log can no longer throw into the escalation path,
+# Stage 3 runs shutdown.exe before it logs, the watchdog does not restart
+# HWiNFO/RemoteHWInfo while a Stage 2/3 timer is running, -DryRun/-SimulateTemp
+# no longer start programs, install anything or touch the firewall/registry,
+# the HEALTHY line names the resolved CPU/GPU sensors, diagnostic block removed.
+$ScriptVersion = "1.54"
 
 # --- TLS (GLOBAL, EARLY) -----------------------------------------------------
 # PowerShell 5.1 / .NET Framework does not always default to TLS 1.2, which
@@ -117,7 +123,7 @@ $NTFY_Password = ""
 # Uses the ntfy settings above for the alert; independent of $EnableNtfy so
 # the toast still fires even with ntfy off (Send-Alert always tries both).
 $EnableUpdateCheck        = $false
-$UpdateCheckRepo          = "pol4rfuchs/ThermalGuard-hwinfo64"   # "owner/repo"
+$UpdateCheckRepo          = "pol4rfuchs/Thermalguard-hwinfo64"   # "owner/repo"
 $UpdateCheckIntervalHours = 24
 
 # --- UPDATE INSTALL (download, stage, and swap the running script) ----------------
@@ -367,6 +373,9 @@ $EmergencyShutdownDelaySec = 10
 $LoopGapResetSec = 180
 
 # --- KILL LIST (Stage 2) --------------------------------------------------------
+# These are the author's own games/apps. ADJUST THIS LIST to your setup before
+# you rely on it: at Stage 2 every listed process is force-killed (unsaved work
+# in a browser or game is lost).
 $KillProcesses = @(
     "TslGame"
     "Stalker2-Win64-Shipping"
@@ -479,19 +488,23 @@ function Write-Log {
     param([string]$Message, [string]$Level = "INFO")
     $ts   = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $line = "[$ts] [$Level] $Message"
-    Add-Content -Path $LogFile -Value $line -Encoding UTF8
+    # Logging must never be able to throw into the caller: several processes
+    # (guard, update installer, launcher) share this file, so a locked file or a
+    # failed rotation is possible, and Write-Log is also called on the Stage 2/3
+    # path. A line that cannot be written is still shown on the console.
+    try { Add-Content -Path $LogFile -Value $line -Encoding UTF8 -ErrorAction Stop } catch { }
     Write-Host $line
-    if ((Test-Path $LogFile) -and ((Get-Item $LogFile).Length / 1MB) -gt $MaxLogSizeMB) {
-        $backup = $LogFile -replace '\.log$', "_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
-        Move-Item $LogFile $backup -Force
-        try {
+    try {
+        if ((Test-Path $LogFile) -and ((Get-Item $LogFile).Length / 1MB) -gt $MaxLogSizeMB) {
+            $backup = $LogFile -replace '\.log$', "_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+            Move-Item $LogFile $backup -Force -ErrorAction Stop
             $keepLogs = [Math]::Max(1, $MaxLogFilesToKeep)
             Get-ChildItem -Path $LogDir -Filter 'thermalguard_*.log' -ErrorAction SilentlyContinue |
                 Sort-Object LastWriteTime -Descending |
                 Select-Object -Skip $keepLogs |
                 Remove-Item -Force -ErrorAction SilentlyContinue
-        } catch { }
-    }
+        }
+    } catch { }
 }
 
 # Used by the main loop to contain an unexpected exception in one subsystem
@@ -564,6 +577,10 @@ function Resolve-HWiNFO {
         return $found
     }
 
+    if ($DryRun) {
+        Write-Log "HWiNFO64        [DRYRUN] not found, NOT installed (a dry run installs nothing)" "WARN"
+        return $null
+    }
     Write-Log "HWiNFO64        [MISSING] Attempting install via winget..." "WARN"
     try {
         $winget = Get-Command winget -ErrorAction SilentlyContinue
@@ -603,6 +620,10 @@ function Resolve-RemoteHWInfo {
         return $found
     }
 
+    if ($DryRun) {
+        Write-Log "RemoteHWInfo    [DRYRUN] not found, NOT downloaded (a dry run installs nothing)" "WARN"
+        return $null
+    }
     Write-Log "RemoteHWInfo    [MISSING] Downloading..." "WARN"
     try {
         $downloadUrl = $RemoteHWInfoZipUrl
@@ -682,6 +703,10 @@ function Resolve-BurntToast {
     # therefore only ever returns informational state; its result is not
     # used to fail Test-Requirements any more.
     if (-not (Get-Module -ListAvailable -Name BurntToast)) {
+        if ($DryRun) {
+            Write-Log "BurntToast      [DRYRUN] missing, NOT installed (a dry run installs nothing)" "WARN"
+            return $false
+        }
         Write-Log "BurntToast      [MISSING] Attempting install..." "WARN"
         try {
             [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
@@ -1013,24 +1038,6 @@ $script:DedicatedTempLabels = @(
     $Sensors | Where-Object { $_.Type -eq "temp" } | ForEach-Object { $_.SensorMatch }
 )
 
-# DIAGNOSTIC: dumps the exact type and content of each sensor's SensorMatch
-# right after construction. Added after a production incident where a GPU
-# sensor's SensorMatch was somehow reduced to a single character ('G') by
-# the time it reached the lookup code, causing a false-positive emergency
-# shutdown. This makes it possible to tell whether the corruption already
-# exists at config time (bug is in $GPUProfiles/$Sensors construction
-# above) or only appears later (bug is in Find-SensorValue/self-test).
-# Safe to remove once the root cause is confirmed and fixed.
-foreach ($diagSensor in $Sensors) {
-    $smType = if ($null -eq $diagSensor.SensorMatch) { "NULL" } else { $diagSensor.SensorMatch.GetType().Name }
-    $smDisplay = if ($diagSensor.SensorMatch -is [array]) {
-        "[" + ($diagSensor.SensorMatch -join ' | ') + "]"
-    } else {
-        "'$($diagSensor.SensorMatch)' (length $(([string]$diagSensor.SensorMatch).Length))"
-    }
-    Write-Log "DIAG: Sensor '$($diagSensor.Name)' SensorMatch type=$smType value=$smDisplay"
-}
-
 # === SOFTWARE CHECK ===========================================================
 
 function Test-Requirements {
@@ -1041,17 +1048,21 @@ function Test-Requirements {
     # BurntToast failure is informational only (report finding #7).
     Resolve-BurntToast | Out-Null
 
+    # A dry run never installs or starts anything: a missing program is not a
+    # failure there, only the endpoint check below decides.
     $script:ResolvedHWiNFO = Resolve-HWiNFO
-    if (-not $script:ResolvedHWiNFO) { $ok = $false }
+    if (-not $script:ResolvedHWiNFO -and -not $DryRun) { $ok = $false }
 
     $script:ResolvedRemoteHWInfo = Resolve-RemoteHWInfo
-    if (-not $script:ResolvedRemoteHWInfo) { $ok = $false }
+    if (-not $script:ResolvedRemoteHWInfo -and -not $DryRun) { $ok = $false }
 
     $hw = Get-Process HWiNFO64 -ErrorAction SilentlyContinue
     if ($hw) {
         Write-Log "HWiNFO64 Proc   [OK] PID $($hw.Id), started $($hw.StartTime)"
     } else {
-        if ($script:ResolvedHWiNFO) {
+        if ($DryRun) {
+            Write-Log "HWiNFO64 Proc   [DRYRUN] not running, NOT started (a dry run never starts programs)" "WARN"
+        } elseif ($script:ResolvedHWiNFO) {
             Write-Log "HWiNFO64 Proc   [STARTING]..." "WARN"
             Start-Process $script:ResolvedHWiNFO
             Start-Sleep -Seconds 15
@@ -1073,7 +1084,9 @@ function Test-Requirements {
     if ($rh) {
         Write-Log "RemoteHWInfo Proc [OK] PID $($rh.Id)"
     } else {
-        if ($script:ResolvedRemoteHWInfo) {
+        if ($DryRun) {
+            Write-Log "RemoteHWInfo Proc [DRYRUN] not running, NOT started (a dry run never starts programs)" "WARN"
+        } elseif ($script:ResolvedRemoteHWInfo) {
             Write-Log "RemoteHWInfo Proc [STARTING]..." "WARN"
             Start-Process $script:ResolvedRemoteHWInfo -ArgumentList "-hwinfo=1 -gpuz=0 -afterburner=0" -WindowStyle Hidden
             Start-Sleep -Seconds 5
@@ -1144,7 +1157,7 @@ function Test-Requirements {
 
     if ($EnableFipha) {
         $script:ResolvedFipha = Resolve-Fipha
-        if ($script:ResolvedFipha) {
+        if ($script:ResolvedFipha -and -not $DryRun) {
             $fp = Get-Process fipha -ErrorAction SilentlyContinue
             if ($fp) {
                 Write-Log "fipha Proc      [OK] PID $($fp.Id)"
@@ -1172,7 +1185,11 @@ function Test-Requirements {
         # part of the thermal protection loop itself.
     }
 
-    Set-FirewallHardening
+    if ($DryRun) {
+        Write-Log "Firewall        [DRYRUN] not touched"
+    } else {
+        Set-FirewallHardening
+    }
 
     Write-Log "=== Software Check complete ==="
     return $ok
@@ -2093,8 +2110,15 @@ function Get-HWiNFOSensors {
 
 $script:LoggedFallbackUsed = @{}
 
+# The reading Find-SensorValueSingle last resolved a value from ($null when the
+# last lookup resolved nothing). Used for the HEALTHY line, so the log says which
+# physical sensors the guard is actually protecting.
+$script:LastResolvedReading = $null
+
 function Find-SensorValueSingle {
     param($SensorData, [string]$Match, $PreferredSensorIndex = $null, [string]$PreferredUnit = $null, [string]$RequiredUnitPattern = $null)
+
+    $script:LastResolvedReading = $null
 
     # SAFETY GUARD: no real HWiNFO sensor label is 1-2 characters long. If
     # $Match ever ends up that short (observed in production as a single
@@ -2184,6 +2208,7 @@ function Find-SensorValueSingle {
     # only the string case needs the explicit invariant-culture parse.
     $rawValue = $m[0].value
     if ($rawValue -is [double] -or $rawValue -is [int] -or $rawValue -is [long] -or $rawValue -is [decimal]) {
+        $script:LastResolvedReading = $m[0]
         return [double]$rawValue
     }
     $parsed = $null
@@ -2192,6 +2217,7 @@ function Find-SensorValueSingle {
             [System.Globalization.NumberStyles]::Float,
             [System.Globalization.CultureInfo]::InvariantCulture,
             [ref]$parsed)) {
+        $script:LastResolvedReading = $m[0]
         return $parsed
     }
     return $null
@@ -2257,14 +2283,15 @@ function Invoke-Shutdown {
         Send-Alert -Title "EMERGENCY SHUTDOWN" -Body "Dry run: the system would be shutting down now. Nothing was shut down." -Priority "urgent"
         return
     }
-    Write-Log "=== STAGE 3: EMERGENCY SHUTDOWN ===" "CRIT"
-    # Shutdown FIRST, alert second. The alert (toast + ntfy) is network and UI
-    # work that can hang for many seconds (DNS, blocked proxy); it used to run
+    # Shutdown FIRST, log and alert after. The alert (toast + ntfy) is network and
+    # UI work that can hang for many seconds (DNS, blocked proxy); it used to run
     # before the shutdown and could delay the emergency stop by that long. The
-    # short countdown gives the alert a bounded window to go out.
+    # short countdown gives the log line and the alert a bounded window to go out.
     & shutdown.exe /s /f /t $EmergencyShutdownDelaySec
-    if ($LASTEXITCODE -ne 0) {
-        Write-Log "shutdown.exe returned exit code $LASTEXITCODE - the system may NOT be shutting down" "ERROR"
+    $shutdownExit = $LASTEXITCODE
+    Write-Log "=== STAGE 3: EMERGENCY SHUTDOWN ===" "CRIT"
+    if ($shutdownExit -ne 0) {
+        Write-Log "shutdown.exe returned exit code $shutdownExit - the system may NOT be shutting down" "ERROR"
     }
     Send-Alert -Title "EMERGENCY SHUTDOWN" -Body "System is shutting down in ${EmergencyShutdownDelaySec}s." -Priority "urgent"
 }
@@ -2388,6 +2415,11 @@ function Wait-NextPoll {
 
 $script:GlobalStage2Executed = $false
 
+# True while at least one Stage 2/3 timer is running (set at the top of every
+# main-loop iteration). The watchdog does not restart anything meanwhile.
+$script:CriticalTimerActive    = $false
+$script:RestartDeferredLogged  = $false
+
 function Invoke-CriticalEscalation {
     param(
         [string]$Name,
@@ -2473,6 +2505,18 @@ function Invoke-Watchdog {
     $rhProc = Get-Process RemoteHWInfo -ErrorAction SilentlyContinue
     $endpointDiag = Test-EndpointHealthy
     $endpointOk = $endpointDiag.Healthy
+
+    # A restart blocks the main loop for 15-25 s (Start-Sleep), which would stall
+    # a running Stage 2/3 timer. While one is running, restarts wait: the
+    # escalation itself already treats missing data as "presumed critical".
+    if ($script:CriticalTimerActive -and ((-not $hwProc) -or (-not $rhProc) -or (-not $endpointOk))) {
+        if (-not $script:RestartDeferredLogged) {
+            Write-Log "WATCHDOG: restart deferred, a Stage 2/3 timer is running (a restart would block the escalation for 15-25 s)" "WARN"
+            $script:RestartDeferredLogged = $true
+        }
+        return
+    }
+    $script:RestartDeferredLogged = $false
 
     if (-not $hwProc) {
         Write-Log "WATCHDOG: HWiNFO64 process gone, restarting..." "WARN"
@@ -2628,12 +2672,16 @@ function Start-ThermalGuard {
         Write-Log "*** SIMULATED CPU temperature: $SimulateTemp C (overrides the real 'CPU Tctl/Tdie' reading) ***" "WARN"
     }
 
-    try {
-        $null = New-ItemProperty -Path "HKCU:\SOFTWARE\HWiNFO64\Settings" -Name "SensorsSM" `
-            -Value 1 -PropertyType DWord -Force -ErrorAction SilentlyContinue
-        Write-Log "Shared Memory   Registry key set"
-    } catch {
-        Write-Log "Shared Memory   Registry access failed: $_" "WARN"
+    if ($DryRun) {
+        Write-Log "Shared Memory   [DRYRUN] registry key not touched"
+    } else {
+        try {
+            $null = New-ItemProperty -Path "HKCU:\SOFTWARE\HWiNFO64\Settings" -Name "SensorsSM" `
+                -Value 1 -PropertyType DWord -Force -ErrorAction SilentlyContinue
+            Write-Log "Shared Memory   Registry key set"
+        } catch {
+            Write-Log "Shared Memory   Registry access failed: $_" "WARN"
+        }
     }
 
     $ready = Test-Requirements
@@ -2674,6 +2722,7 @@ function Start-ThermalGuard {
     $fanSeenSpinning        = @{}
     $presumedLogged         = @{}
     $lastLoopTick           = $null
+    $resolvedTempInfo       = @{}
 
     # Boot-loop breaker: were the last fail-safe shutdowns never followed by a healthy poll?
     $script:FailsafeShutdownDisarmed = $false
@@ -2705,6 +2754,14 @@ function Start-ThermalGuard {
             $script:BlindStage2Done = $false
         }
         $lastLoopTick = $loopTick
+
+        # Refreshed BEFORE the watchdog runs (it used to be set only at the end of
+        # the iteration, so the watchdog saw the previous iteration's state).
+        # CriticalTimerActive = a Stage 2/3 timer is really running; the watchdog
+        # then defers restarts that would block this loop. AnyStageCriticalActive
+        # additionally covers the blind (data-loss) counter and keeps updates away.
+        $script:CriticalTimerActive    = ($triggerTimestamps.Count -gt 0)
+        $script:AnyStageCriticalActive = ($script:CriticalTimerActive -or ($null -ne $script:BlindSince))
 
         # Nothing in the info/maintenance subsystems may end the protection
         # loop: each one is contained and logged (rate-limited), the sensor
@@ -2926,7 +2983,11 @@ function Start-ThermalGuard {
                         $missingSensorLastAlert.Remove($sName)
                     }
                     $script:LoggedImplausibleTemp.Remove($sName)
-                    if ($sensor.Type -eq "temp") { $tempOk[$sName] = $true }
+                    if ($sensor.Type -eq "temp") {
+                        $tempOk[$sName] = $true
+                        $rr = $script:LastResolvedReading
+                        if ($rr) { $resolvedTempInfo[$sName] = "'$($rr.labelOriginal)' (sensorIndex=$($rr.sensorIndex), unit=$($rr.unit))" }
+                    }
                 }
 
                 # No usable reading (missing or implausible). A sensor with no
@@ -3038,7 +3099,9 @@ function Start-ThermalGuard {
         # valid reading, i.e. the guard is not blind. One resolved sensor is not
         # enough: a version that breaks only the CPU lookup must not count as healthy.
         if (-not $healthMarkerLogged -and -not $isBlind) {
-            Write-Log "=== $HealthMarkerText ($($tempOk.Count) temperature sensor(s) resolved) ==="
+            $resolvedList = (@($primaryTemps | Where-Object { $resolvedTempInfo[$_] } | ForEach-Object { "$_ -> $($resolvedTempInfo[$_])" })) -join '; '
+            if ($resolvedList) { $resolvedList = ": $resolvedList" }
+            Write-Log "=== $HealthMarkerText ($($tempOk.Count) temperature sensor(s) resolved$resolvedList) ==="
             $healthMarkerLogged = $true
             # The sensor data works: whatever caused earlier fail-safe shutdowns is gone.
             if (-not $DryRun) {

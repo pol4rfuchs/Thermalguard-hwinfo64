@@ -1,4 +1,4 @@
-# HWiNFO Thermal Guard v1.53
+# HWiNFO Thermal Guard v1.54
 
 [Deutsch](README.md) | **[English](README.en.md)**
 
@@ -59,7 +59,8 @@ Monitors CPU and GPU sensors in real time via HWiNFO + RemoteHWInfo and reacts t
 
 4. Set up autostart: run `Install-ScheduledTask.ps1` from an **administrator PowerShell** (see [Autostart](#setting-up-autostart)).
    For a quick test, right-click `Start-HWiNFO-Remote.bat` → **Run as administrator** also works
-5. Done - anything missing (HWiNFO64, RemoteHWInfo, BurntToast) gets installed automatically
+5. **Adjust the kill list:** `$KillProcesses` in `HWiNFO-ThermalGuard.ps1` holds the author's own games and programs (among them `TslGame`, `Stalker2-Win64-Shipping`, `obs64`, browsers). Stage 2 force-kills everything in that list. See the process list section below
+6. Done - anything missing (HWiNFO64, RemoteHWInfo, BurntToast) gets installed automatically
 
 ---
 
@@ -183,7 +184,7 @@ Windows toast notifications always work, independent of ntfy.
 
 ```powershell
 $EnableUpdateCheck        = $true     # 1) report: toast + ntfy when a newer release exists
-$UpdateCheckRepo          = "pol4rfuchs/ThermalGuard-hwinfo64"   # "owner/repo"
+$UpdateCheckRepo          = "pol4rfuchs/Thermalguard-hwinfo64"   # "owner/repo"
 $UpdateCheckIntervalHours = 24
 
 $EnableAutoDownload       = $true     # 2) download, verify, stage - but do NOT activate
@@ -380,6 +381,7 @@ Why a separate time trigger? A repetition attached to the logon trigger only sta
 - Test: kill the guard (`Stop-Process` on the PowerShell process running `HWiNFO-ThermalGuard.ps1`) and wait at most 5 minutes. The PC is unprotected during that time, so test while idle.
 - Test right away: `Start-ScheduledTask -TaskName 'HWiNFO Thermal Guard'`
 - **Do not also** put the `.vbs` in `shell:startup`, or the chain starts twice.
+- **Only while the user is logged on:** the task uses logon type `Interactive` for your account. Protection starts after logon, not at the lock screen before logon and not after a reboot without auto-login (HWiNFO is a user-session program anyway).
 
 ### Method 2: shell:startup (no self-heal)
 
