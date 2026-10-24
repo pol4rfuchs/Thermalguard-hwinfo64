@@ -440,7 +440,7 @@ $Custom = @(
         $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
         $null = & icacls.exe $d /grant "${me}:(OI)(CI)F" 2>&1
 
-        $r = Protect-Folder -Path $d
+        $r = Protect-Folder -Path $d -RequiredFile 'tool.exe'
         if ($r.FilesWithEmptyAcl -ne 0) { [void]$f.Add("$($r.FilesWithEmptyAcl) file(s) were left with an EMPTY permission list") }
         if (-not $r.PermissionsSet)     { [void]$f.Add("Protect-Folder reported that the permissions were not set") }
         $adminsSid = 'S-1-5-32-544'; $usersSid = 'S-1-5-32-545'
@@ -458,6 +458,13 @@ $Custom = @(
             if ($rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -eq $meSid) { [void]$f.Add("the explicit entry of the current user was not removed from the folder") }
         }
         try { $null = Get-Content -LiteralPath (Join-Path $d "tool.exe") -ErrorAction Stop } catch { [void]$f.Add("a file in the protected folder can no longer be read: $($_.Exception.Message)") }
+        # a folder that does not directly contain the expected program file, or no expected file at all, is refused
+        $refused = $false
+        try { $null = Protect-Folder -Path $d -RequiredFile 'not-there.exe' } catch { $refused = $true }
+        if (-not $refused) { [void]$f.Add("Protect-Folder accepted a folder without the required file") }
+        $refused = $false
+        try { $null = Protect-Folder -Path $d } catch { $refused = $true }
+        if (-not $refused) { [void]$f.Add("Protect-Folder accepted a call without -RequiredFile") }
         return $f } }
 )
 

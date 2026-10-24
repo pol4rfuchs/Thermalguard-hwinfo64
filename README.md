@@ -1,4 +1,4 @@
-# HWiNFO Thermal Guard v1.53
+# HWiNFO Thermal Guard v1.54
 
 **[Deutsch](README.md)** | [English](README.en.md)
 
@@ -59,7 +59,8 @@ Automatischer thermischer Schutz für Windows-Gaming-PCs.
 
 4. Autostart einrichten: `Install-ScheduledTask.ps1` in einer **Administrator-PowerShell** ausführen (siehe [Autostart](#autostart-einrichten)).
    Zum schnellen Testen reicht auch: `Start-HWiNFO-Remote.bat` per Rechtsklick → **Als Administrator ausführen**
-5. Fertig — alles was fehlt (HWiNFO64, RemoteHWInfo, BurntToast) wird automatisch installiert
+5. **Prozessliste anpassen:** `$KillProcesses` in `HWiNFO-ThermalGuard.ps1` enthält die Spiele und Programme des Autors (u.a. `TslGame`, `Stalker2-Win64-Shipping`, `obs64`, Browser). In Stufe 2 wird alles in dieser Liste hart beendet. Siehe [Prozessliste](#prozessliste-stufe-2)
+6. Fertig — alles was fehlt (HWiNFO64, RemoteHWInfo, BurntToast) wird automatisch installiert
 
 ---
 
@@ -183,7 +184,7 @@ Standardmäßig **alles aus**. Drei Stufen, jede einzeln zuschaltbar:
 
 ```powershell
 $EnableUpdateCheck        = $true     # 1) melden: Toast + ntfy, wenn ein neueres Release existiert
-$UpdateCheckRepo          = "pol4rfuchs/ThermalGuard-hwinfo64"   # "owner/repo"
+$UpdateCheckRepo          = "pol4rfuchs/Thermalguard-hwinfo64"   # "owner/repo"
 $UpdateCheckIntervalHours = 24
 
 $EnableAutoDownload       = $true     # 2) laden, prüfen, bereitstellen - aber NICHT aktivieren
@@ -380,6 +381,7 @@ Warum ein eigener Zeit-Trigger? Eine Wiederholung am Anmelde-Trigger beginnt ers
 - Test: Guard abschießen (`Stop-Process` auf den PowerShell-Prozess mit `HWiNFO-ThermalGuard.ps1`) und höchstens 5 Minuten warten. In dieser Zeit ist der PC ungeschützt, also im Leerlauf testen.
 - Sofort testen: `Start-ScheduledTask -TaskName 'HWiNFO Thermal Guard'`
 - **Nicht zusätzlich** die `.vbs` in `shell:startup` legen, sonst startet die Kette doppelt.
+- **Nur bei angemeldetem Benutzer:** Der Task läuft mit Anmeldetyp `Interactive` für dein Konto. Der Schutz greift erst nach der Anmeldung, nicht am Sperrbildschirm vor der Anmeldung und nicht nach einem Neustart ohne Auto-Login (HWiNFO ist ohnehin ein Programm der Benutzersitzung).
 
 ### Methode 2: shell:startup (ohne Selbstheilung)
 
