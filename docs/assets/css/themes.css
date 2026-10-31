@@ -1,0 +1,330 @@
+/*
+  Wiki hub themes — loaded after site.css.
+  html[data-theme] = bento (default, set by themes.js) | docs
+  Without JS the plain site.css look is shown (accent-tinted cards).
+  Every card carries its add-on accent as --a (same colour as the add-on's own wiki).
+  Rule: relative paths only, no external dependencies.
+*/
+
+[hidden] { display: none !important; }
+
+/* ---------- shared: theme switcher, category groups, card parts ---------- */
+
+.topbar { flex-wrap: wrap; }
+
+.theme-switch {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.theme-switch button {
+  padding: 7px 12px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: 700 0.78rem/1 var(--mono);
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease;
+}
+
+.theme-switch button:hover { color: var(--text); }
+
+.theme-switch button[aria-pressed="true"] {
+  background: var(--ntfy);
+  color: #02110b;
+}
+
+.theme-switch button:focus-visible,
+.side-nav a:focus-visible,
+.card:focus-visible {
+  outline: 2px solid var(--ntfy);
+  outline-offset: 2px;
+}
+
+.cat-title {
+  margin: 30px 0 4px;
+  color: var(--muted);
+  font: 700 0.8rem/1.2 var(--mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.cat-group:first-child .cat-title { margin-top: 18px; }
+
+.side-nav { display: none; }
+
+/* base: accent-tinted cards (no-JS fallback, also the base for docs) */
+.card {
+  --a: var(--ntfy);
+  border-color: color-mix(in srgb, var(--a) 28%, transparent);
+  background: linear-gradient(160deg, color-mix(in srgb, var(--a) 14%, #06150f), rgba(6, 21, 15, 0.8));
+}
+
+.card::before { background: linear-gradient(135deg, color-mix(in srgb, var(--a) 18%, transparent), transparent 55%); }
+
+.card:hover {
+  border-color: var(--a);
+  box-shadow: 0 14px 40px color-mix(in srgb, var(--a) 22%, transparent);
+}
+
+.card-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  margin-bottom: 12px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--a) 22%, transparent);
+  font-size: 1.3rem;
+}
+
+.card h3 { color: var(--a); font-family: var(--mono); font-size: 1.02rem; letter-spacing: 0; }
+.card .badge { color: var(--muted); background: rgba(255, 255, 255, 0.06); border-color: transparent; }
+.card-link { color: var(--a); }
+
+/* ---------- DOCS: sidebar layout like the add-on wikis ---------- */
+
+html[data-theme="docs"] body.hub .shell {
+  width: min(1480px, calc(100% - 24px));
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 0 18px;
+  align-items: start;
+}
+
+html[data-theme="docs"] body.hub .topbar { grid-column: 1 / -1; border-radius: 20px; }
+
+html[data-theme="docs"] body.hub .side-nav {
+  display: block;
+  position: sticky;
+  top: 84px;
+  max-height: calc(100vh - 100px);
+  overflow: auto;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  background: var(--panel);
+  backdrop-filter: blur(18px);
+}
+
+html[data-theme="docs"] body.hub main,
+html[data-theme="docs"] body.hub .footer { grid-column: 2; min-width: 0; }
+
+html[data-theme="docs"] body.hub .side-title {
+  margin: 14px 6px 6px;
+  color: var(--dim);
+  font: 700 0.68rem/1 var(--mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+html[data-theme="docs"] body.hub .side-title:first-child { margin-top: 2px; }
+
+html[data-theme="docs"] body.hub .side-nav a {
+  --a: var(--ntfy);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  color: var(--muted);
+  font-size: 0.88rem;
+  text-decoration: none;
+}
+
+html[data-theme="docs"] body.hub .side-nav a i {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--a);
+  box-shadow: 0 0 10px var(--a);
+}
+
+html[data-theme="docs"] body.hub .side-nav a:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--a) 35%, transparent);
+  background: color-mix(in srgb, var(--a) 12%, transparent);
+}
+
+html[data-theme="docs"] body.hub .hero { grid-template-columns: 1fr; }
+html[data-theme="docs"] body.hub .hero-panel { border-radius: 28px; }
+html[data-theme="docs"] body.hub h1 { font-size: clamp(1.9rem, 4vw, 3rem); letter-spacing: -0.02em; }
+html[data-theme="docs"] body.hub .status-panel {
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+  padding: 14px;
+}
+html[data-theme="docs"] body.hub .status-row {
+  flex-direction: column;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: rgba(0, 0, 0, 0.24);
+}
+html[data-theme="docs"] body.hub .status-value { text-align: left; }
+html[data-theme="docs"] body.hub .docs-grid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+html[data-theme="docs"] body.hub .card {
+  padding: 16px 18px;
+  border-radius: 18px;
+  border-left: 3px solid var(--a);
+  background: var(--panel);
+}
+html[data-theme="docs"] body.hub .card:hover { transform: translateX(3px); background: color-mix(in srgb, var(--a) 10%, #071510); }
+html[data-theme="docs"] body.hub .card-icon,
+html[data-theme="docs"] body.hub .card .meta,
+html[data-theme="docs"] body.hub .card-link { display: none; }
+html[data-theme="docs"] body.hub .card h3 { margin-bottom: 4px; }
+html[data-theme="docs"] body.hub .card p { margin: 0; font-size: 0.86rem; }
+
+@media (max-width: 900px) {
+  html[data-theme="docs"] body.hub .shell { display: block; }
+  html[data-theme="docs"] body.hub .side-nav { display: none; }
+}
+
+/* ---------- BENTO: big tiles, light + dark via prefers-color-scheme ---------- */
+
+html[data-theme="bento"] {
+  color-scheme: light dark;
+  --bg: #f6f4ef;
+  --panel: #ffffff;
+  --text: #16181d;
+  --muted: #5d6470;
+  --dim: #7a828e;
+  --border: #e4e0d6;
+  --border-strong: #c9c3b4;
+  --ntfy: #0f9f6e;
+  --shadow: 0 10px 30px rgba(22, 24, 29, 0.08);
+  --glow: 0 0 0 transparent;
+}
+
+@media (prefers-color-scheme: dark) {
+  html[data-theme="bento"] {
+    --bg: #0b0d10;
+    --panel: #14171c;
+    --text: #eef1f5;
+    --muted: #8a93a0;
+    --dim: #6b7380;
+    --border: #242a32;
+    --border-strong: #38414c;
+    --ntfy: #34d399;
+    --shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+  }
+}
+
+html[data-theme="bento"] body { background: var(--bg); }
+html[data-theme="bento"] body::before,
+html[data-theme="bento"] body::after { display: none; }
+
+html[data-theme="bento"] .topbar,
+html[data-theme="bento"] .hero-panel,
+html[data-theme="bento"] .status-panel,
+html[data-theme="bento"] .footer,
+html[data-theme="bento"] .code-panel {
+  background: var(--panel);
+  backdrop-filter: none;
+  box-shadow: var(--shadow);
+}
+html[data-theme="bento"] .topbar { position: static; background: transparent; border-color: transparent; box-shadow: none; }
+html[data-theme="bento"] .theme-switch { background: var(--panel); }
+html[data-theme="bento"] .nav a:hover,
+html[data-theme="bento"] .nav a[aria-current="page"] { background: color-mix(in srgb, var(--ntfy) 12%, transparent); }
+
+html[data-theme="bento"] .hero { grid-template-columns: 1fr; margin-top: 28px; }
+html[data-theme="bento"] .hero-panel { padding: 24px 0 0; border: 0; background: none; box-shadow: none; overflow: visible; }
+html[data-theme="bento"] .hero-panel::after { display: none; }
+html[data-theme="bento"] body.hub .status-panel { display: none; }
+html[data-theme="bento"] .hero-panel h1 {
+  max-width: 14ch;
+  font-size: clamp(2.4rem, 7vw, 5rem);
+  line-height: 1;
+  letter-spacing: -0.045em;
+  background: linear-gradient(90deg, var(--text) 30%, #06b6d4, #8b5cf6, #f97316);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+html[data-theme="bento"] .lead { color: var(--muted); }
+html[data-theme="bento"] .eyebrow { background: var(--panel); color: var(--ntfy); }
+html[data-theme="bento"] .ghost-button { background: var(--panel); color: var(--text); }
+html[data-theme="bento"] .search-box { max-width: 440px; background: var(--panel); color: var(--text); }
+html[data-theme="bento"] pre { color: var(--text); }
+
+html[data-theme="bento"] .cat-title { display: none; }
+html[data-theme="bento"] .catalog,
+html[data-theme="bento"] .cat-group { display: contents; }
+html[data-theme="bento"] .catalog-grid,
+html[data-theme="bento"] .docs-grid { display: contents; }
+html[data-theme="bento"] .catalog {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-auto-rows: minmax(170px, auto);
+  grid-auto-flow: dense;
+  gap: 14px;
+  margin-top: 16px;
+}
+
+html[data-theme="bento"] .card {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  padding: 20px;
+  border-radius: 26px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  box-shadow: none;
+  backdrop-filter: none;
+}
+html[data-theme="bento"] .card::before {
+  opacity: 0.8;
+  background: linear-gradient(150deg, color-mix(in srgb, var(--a) 22%, transparent), transparent 60%);
+}
+html[data-theme="bento"] .card:hover { transform: scale(1.015); border-color: var(--a); box-shadow: none; }
+html[data-theme="bento"] .card[data-size="big"] { grid-column: span 2; grid-row: span 2; order: -2; }
+html[data-theme="bento"] .card[data-size="wide"] { grid-column: span 2; order: -1; }
+html[data-theme="bento"] .card h3 { color: var(--text); }
+html[data-theme="bento"] .card-icon { background: none; width: auto; height: auto; place-items: start; font-size: 2rem; }
+html[data-theme="bento"] .card[data-size="big"] .card-icon { font-size: 3.6rem; }
+html[data-theme="bento"] .card[data-size="big"] h3 { font-size: 1.5rem; }
+html[data-theme="bento"] .card .meta { margin: auto 0 8px; padding-top: 12px; }
+html[data-theme="bento"] .card .badge { background: none; padding: 0; border: 0; color: color-mix(in srgb, var(--a) 62%, #000); font-size: 0.66rem; letter-spacing: 0.14em; }
+html[data-theme="bento"] .card .badge + .badge { display: none; }
+html[data-theme="bento"] .card p { margin: 6px 0 0; font-size: 0.85rem; }
+html[data-theme="bento"] .card-link { display: none; }
+
+@media (prefers-color-scheme: dark) {
+  html[data-theme="bento"] .card .badge { color: color-mix(in srgb, var(--a) 70%, #fff); }
+}
+
+@media (max-width: 900px) {
+  html[data-theme="bento"] .catalog { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 520px) {
+  html[data-theme="bento"] .catalog { grid-template-columns: 1fr; }
+  html[data-theme="bento"] .card[data-size] { grid-column: auto; grid-row: auto; }
+}
+
+/* bento: pages that share site.css but have their own layout (hwinfo-thermalguard) */
+html[data-theme="bento"] .doc-sidebar,
+html[data-theme="bento"] .doc-main { background: var(--panel); backdrop-filter: none; box-shadow: var(--shadow); }
+html[data-theme="bento"] .doc-nav-link,
+html[data-theme="bento"] .doc-nav-group,
+html[data-theme="bento"] .doc-nav-chip { background: color-mix(in srgb, var(--ntfy) 6%, var(--panel)); border-color: var(--border); }
+html[data-theme="bento"] .doc-nav-link:hover,
+html[data-theme="bento"] .doc-nav-link[aria-current="page"],
+html[data-theme="bento"] .doc-nav-chip:hover { background: color-mix(in srgb, var(--ntfy) 14%, var(--panel)); }
+html[data-theme="bento"] .lang-pill { background: var(--panel); color: var(--text); border-color: var(--border); }
+html[data-theme="bento"] .lang-pill[aria-pressed="true"] { background: color-mix(in srgb, var(--ntfy) 16%, var(--panel)); border-color: var(--ntfy); }
+html[data-theme="bento"] .table-wrap { background: var(--panel); }
+html[data-theme="bento"] td,
+html[data-theme="bento"] th { border-bottom-color: var(--border); }
+html[data-theme="bento"] th { color: var(--ntfy); }
+html[data-theme="bento"] code,
+html[data-theme="bento"] .kbd { background: color-mix(in srgb, var(--ntfy) 10%, var(--panel)); color: var(--text); border-color: var(--border); }
+html[data-theme="bento"] .status-row { border-bottom-color: var(--border); }
