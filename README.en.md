@@ -356,7 +356,7 @@ Get-Process | Where-Object { $_.MainWindowTitle -ne "" }
 `Find-NewGames.ps1` finds newly installed games and proposes them for the process list. **Nothing is added without your confirmation**, because an entry means: Stage 2 force-kills that process.
 
 1. **Scan** (no admin rights): searches the install folders of Steam (including extra libraries), Epic, GOG, Rockstar, Ubisoft, EA and Battle.net, picks the two largest `.exe` per game folder (installers, crash handlers and anti-cheat removed) and puts **new** finds on a waiting list: `%USERPROFILE%\HWiNFO-ThermalGuard\DetectedGames.json`.
-2. **Confirm** (administrator PowerShell): per find `y` (add), `n` (ask again later) or `i` (never ask again).
+2. **Confirm** (administrator PowerShell): per find `y` (add), `n` (ask again later), `i` (never ask again), `a` (add this and all remaining) or `q` (stop, the rest stays waiting).
 3. Confirmed names go to `ApprovedGames.txt` **next to the main script**. The guard reads it at every Stage 2 in addition to `$KillProcesses`; no restart needed. Because the file sits in the script folder, `Install-ScheduledTask.ps1 -FixPermissions` protects it too. System processes (`explorer`, `svchost`, `lsass` ...) are ignored even if they are written into the file.
 
 ```powershell
@@ -365,6 +365,7 @@ powershell -ExecutionPolicy Bypass -File .\Find-NewGames.ps1 -Approve      # con
 powershell -ExecutionPolicy Bypass -File .\Find-NewGames.ps1 -List         # show state
 powershell -ExecutionPolicy Bypass -File .\Find-NewGames.ps1 -Remove Name  # remove an entry (admin)
 powershell -ExecutionPolicy Bypass -File .\Find-NewGames.ps1 -InstallTask  # scan at logon + every 6 h
+powershell -ExecutionPolicy Bypass -File .\Find-NewGames.ps1 -Reset        # clear the waiting list (then scan again)
 ```
 
 With `-NtfyUrl https://ntfy.sh/your-topic` (also with `-InstallTask`) you get a message when new candidates show up. `-Approve -Yes` adds everything without asking, which is not recommended. Detection is a heuristic: a find can be the wrong `.exe`, which is why confirmation is required.

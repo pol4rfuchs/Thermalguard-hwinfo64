@@ -12,6 +12,7 @@
 #      The kill list of the guard is NOT touched by the scan.
 #   2. APPROVE (-Approve, ELEVATED PowerShell): asks per game
 #        y = add to ApprovedGames.txt   n = ask again later   i = never ask again
+#        a = add this and all remaining   q = stop here, keep the rest waiting
 #      ApprovedGames.txt lives NEXT TO the guard script (the folder that
 #      Install-ScheduledTask.ps1 -FixPermissions protects), so a normal program
 #      cannot add process names to the kill list. The guard reads the file at
@@ -22,6 +23,7 @@
 #   powershell -ExecutionPolicy Bypass -File .\Find-NewGames.ps1 -List        # show state
 #   powershell -ExecutionPolicy Bypass -File .\Find-NewGames.ps1 -Remove Name # take one out (admin)
 #   powershell -ExecutionPolicy Bypass -File .\Find-NewGames.ps1 -InstallTask # run the scan automatically
+#   powershell -ExecutionPolicy Bypass -File .\Find-NewGames.ps1 -Reset       # clear the waiting list (then scan again)
 #
 # -NtfyUrl https://ntfy.sh/topic  sends a message when new candidates are found.
 # -Yes  (with -Approve) approves everything without asking - use with care.
@@ -39,6 +41,7 @@ param(
     [switch]$Yes,
     [string[]]$Remove = @(),
     [switch]$InstallTask,
+    [switch]$Reset,
     [string]$NtfyUrl = ""
 )
 
@@ -61,14 +64,18 @@ $ProtectedNames = @(
     "remotehwinfo", "fipha", "Steam", "steamwebhelper", "EpicGamesLauncher",
     "GalaxyClient", "Battle.net", "Agent", "Origin", "EADesktop", "EABackgroundService",
     "UbisoftConnect", "upc", "RockstarService", "Launcher", "LauncherPatcher",
-    "chrome", "firefox", "msedge"
+    "chrome", "firefox", "msedge",
+    "Game", "Benchmark", "testapp", "Client", "Server", "Main", "App", "Test", "Demo"
 )
 
 # File names that are never the game itself (regex on the file name).
-$ExcludeFileRegex = '^(unins\d*|uninst\w*|setup\w*|install\w*|vc_?redist\S*|vcredist\S*|dxsetup|dxwebsetup|dotnet\S*|ndp\S*|oalinst|physx\S*|UnityCrashHandler\d*|crashpad\S*|crashreport\S*|crashsender\S*|bugreport\S*|BEService\S*|BEClient\S*|EasyAntiCheat\S*|EACLauncher|EOSBootstrapper|UplayWebCore|UbisoftGameLauncher\S*|upc|cleanup\S*|touchup|dwebp|7z\S*|ActivationUI|QuickSFV|redist\S*|DXSETUP|handler|launcherpatcher|CefSharp\S*|CrashHandler\S*)\.exe$'
+$ExcludeFileRegex = '^(unins\d*|uninst\w*|setup\w*|install\w*|vc_?redist\S*|vcredist\S*|dxsetup|dxwebsetup|dotnet\S*|ndp\S*|oalinst|physx\S*|UnityCrashHandler\d*|crashpad\S*|crashreport\S*|crashsender\S*|bugreport\S*|BEService\S*|BEClient\S*|EasyAntiCheat\S*|EACLauncher|EOSBootstrapper|UplayWebCore|UbisoftGameLauncher\S*|upc|cleanup\S*|touchup|dwebp|7z\S*|ActivationUI|QuickSFV|redist\S*|DXSETUP|handler|launcherpatcher|CefSharp\S*|CrashHandler\S*|\S*crash_?reporter\S*|\S*installer\S*|\S*uninstall\S*|\S*editor\S*|worldbuilder\S*|converttogeo\S*|\S*launcher\S*|\S*server\S*|\S*benchmark\S*|\S*_BE|\S*diag\S*|3dmark\S*|dashboardx)\.exe$'
 
 # Folder names that are never searched (regex on the folder name).
 $ExcludeDirRegex = '^(_?CommonRedist|redist\S*|__Installer|DirectX|DotNet\S*|vcredist\S*|EasyAntiCheat\S*|BattlEye|Support|Tools|ThirdParty|Engine|Prerequisites|\.egstore|Launcher|Social Club|Steamworks Shared|SteamLinuxRuntime\S*|Proton\S*|Steam Controller Configs)$'
+
+# Game folders that are tools, not games (regex on the folder name, anywhere in it).
+$ExcludeGameRegex = 'Benchmark|3DMark|Dedicated Server|\bSDK\b|Dashboard|Soundtrack|Wallpaper'
 
 function Write-Info([string]$Text) { Write-Host $Text }
 
@@ -231,11 +238,11 @@ function Get-GameSources {
     foreach ($s in $src) {
         if ($s.IsRoot) {
             foreach ($sub in (Get-ChildItem -LiteralPath $s.Path -Directory -ErrorAction SilentlyContinue)) {
-                if ($sub.Name -notmatch $ExcludeDirRegex) { $games[$sub.FullName.ToLowerInvariant()] = [pscustomobject]@{ Launcher = $s.Launcher; Path = $sub.FullName } }
+                if ($sub.Name -notmatch $ExcludeDirRegex -and $sub.Name -notmatch $ExcludeGameRegex) { $games[$sub.FullName.ToLowerInvariant()] = [pscustomobject]@{ Launcher = $s.Launcher; Path = $sub.FullName } }
             }
         } else {
             $leaf = Split-Path -Leaf $s.Path
-            if ($leaf -notmatch $ExcludeDirRegex) { $games[$s.Path.ToLowerInvariant()] = [pscustomobject]@{ Launcher = $s.Launcher; Path = $s.Path } }
+            if ($leaf -notmatch $ExcludeDirRegex -and $leaf -notmatch $ExcludeGameRegex) { $games[$s.Path.ToLowerInvariant()] = [pscustomobject]@{ Launcher = $s.Launcher; Path = $s.Path } }
         }
     }
     return @($games.Values)
@@ -261,7 +268,14 @@ function Get-GameExecutables([string]$GamePath) {
             }
         }
     }
-    return @($found | Sort-Object Length -Descending | Select-Object -First 2)
+    $sorted = @($found | Sort-Object Length -Descending)
+    if ($sorted.Count -eq 0) { return @() }
+    # Unreal games: the "-Shipping" file is the real game, the small stub next to it is not needed.
+    $ship = @($sorted | Where-Object { $_.BaseName -match '-Shipping$' })
+    if ($ship.Count -gt 0) { return @($ship | Select-Object -First 1) }
+    # Otherwise the largest file, plus a second one only if it is of similar size (e.g. DX / Vulkan variants).
+    $top = $sorted[0]
+    return @($sorted | Where-Object { $_.Length -ge ($top.Length * 0.25) } | Select-Object -First 2)
 }
 
 function Send-Ntfy([string]$Text) {
@@ -326,15 +340,20 @@ function Invoke-ApproveFlow {
     $keep = @()
     $approvedNow = @()
     $ignoredNow = @()
+    $takeAll = $false
+    $stop = $false
     foreach ($p in $pending) {
         $name = [string]$p.process
         if (-not (Test-ValidProcessName $name) -or ($ProtectedNames -contains $name)) { continue }
+        if ($stop) { $keep += $p; continue }
         Write-Info ""
         Write-Info ("{0}   ({1}, {2})" -f $name, $p.game, $p.launcher)
         Write-Info ("  {0}" -f $p.path)
-        if ($Yes) { $ans = "y" } else { $ans = (Read-Host "  Add to kill list? [y]es / [n]ot now / [i]gnore forever").Trim().ToLowerInvariant() }
+        if ($Yes -or $takeAll) { $ans = "y" } else { $ans = (Read-Host "  Add to kill list? [y]es / [n]ot now / [i]gnore forever / [a]ll remaining yes / [q]uit").Trim().ToLowerInvariant() }
         switch -Regex ($ans) {
             '^(y|j)'  { $approvedNow += $p }
+            '^a'      { $takeAll = $true; $approvedNow += $p }
+            '^q'      { $stop = $true; $keep += $p }
             '^i'      { $ignoredNow += $p }
             default   { $keep += $p }
         }
@@ -374,6 +393,11 @@ function Invoke-RemoveFlow {
     Write-Info "Removed $removed entr$(if ($removed -eq 1) {'y'} else {'ies'})."
 }
 
+function Invoke-ResetFlow {
+    Save-PendingList @()
+    Write-Info "Waiting list cleared ($PendingFile). Run the scan again to rebuild it."
+}
+
 function Show-State {
     Write-Info "Approved (kill list extension, $ApprovedFile):"
     $a = @(Get-NameList $ApprovedFile)
@@ -406,5 +430,6 @@ function Install-ScanTask {
 if ($List)              { Show-State; exit 0 }
 if ($Remove.Count -gt 0){ Invoke-RemoveFlow; exit 0 }
 if ($InstallTask)       { Install-ScanTask; exit 0 }
+if ($Reset)             { Invoke-ResetFlow; exit 0 }
 if ($Approve)           { Invoke-ApproveFlow; exit 0 }
 Invoke-Scan
