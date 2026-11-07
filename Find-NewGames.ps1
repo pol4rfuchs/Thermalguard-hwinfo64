@@ -90,18 +90,18 @@ function Get-NameList([string]$Path) {
             if ($n -and (Test-ValidProcessName $n)) { $out += $n }
         }
     }
-    return ,@($out)
+    return @($out)
 }
 
 function Get-PendingList {
-    if (-not (Test-Path $PendingFile)) { return ,@() }
+    if (-not (Test-Path $PendingFile)) { return @() }
     try {
         $raw = Get-Content -Path $PendingFile -Raw -ErrorAction Stop
-        if ([string]::IsNullOrWhiteSpace($raw)) { return ,@() }
-        return ,@($raw | ConvertFrom-Json)
+        if ([string]::IsNullOrWhiteSpace($raw)) { return @() }
+        return @($raw | ConvertFrom-Json)
     } catch {
         Write-Info "WARNING: $PendingFile unreadable ($($_.Exception.Message)) - starting with an empty waiting list."
-        return ,@()
+        return @()
     }
 }
 
@@ -123,7 +123,7 @@ function Get-GuardKillNames {
             foreach ($q in [regex]::Matches($m.Groups[1].Value, '"([^"]+)"')) { $names += $q.Groups[1].Value }
         }
     }
-    return ,@($names)
+    return @($names)
 }
 
 # --- find install folders per launcher -----------------------------------------
@@ -238,7 +238,7 @@ function Get-GameSources {
             if ($leaf -notmatch $ExcludeDirRegex) { $games[$s.Path.ToLowerInvariant()] = [pscustomobject]@{ Launcher = $s.Launcher; Path = $s.Path } }
         }
     }
-    return ,@($games.Values)
+    return @($games.Values)
 }
 
 # The two largest candidate executables of one game folder.
@@ -261,7 +261,7 @@ function Get-GameExecutables([string]$GamePath) {
             }
         }
     }
-    return ,@($found | Sort-Object Length -Descending | Select-Object -First 2)
+    return @($found | Sort-Object Length -Descending | Select-Object -First 2)
 }
 
 function Send-Ntfy([string]$Text) {
@@ -376,7 +376,7 @@ function Invoke-RemoveFlow {
 
 function Show-State {
     Write-Info "Approved (kill list extension, $ApprovedFile):"
-    $a = Get-NameList $ApprovedFile
+    $a = @(Get-NameList $ApprovedFile)
     if ($a.Count -eq 0) { Write-Info "  (none)" } else { foreach ($n in $a) { Write-Info "  $n" } }
     Write-Info ""
     Write-Info "Waiting for confirmation ($PendingFile):"
@@ -384,7 +384,7 @@ function Show-State {
     if ($p.Count -eq 0) { Write-Info "  (none)" } else { foreach ($i in $p) { Write-Info ("  {0,-32} {1} ({2})" -f $i.process, $i.game, $i.launcher) } }
     Write-Info ""
     Write-Info "Ignored ($IgnoredFile):"
-    $ig = Get-NameList $IgnoredFile
+    $ig = @(Get-NameList $IgnoredFile)
     if ($ig.Count -eq 0) { Write-Info "  (none)" } else { foreach ($n in $ig) { Write-Info "  $n" } }
 }
 

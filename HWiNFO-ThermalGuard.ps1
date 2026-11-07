@@ -2267,13 +2267,15 @@ function Find-GPULoad {
 # -FixPermissions). Only plain process names are accepted, and system / shell /
 # security names are refused even if someone writes them into the file.
 function Get-ApprovedGameProcesses {
+    $out = @()
+    # No script folder known (dot-sourced / pasted): there is no file to read.
+    if (-not $PSScriptRoot) { return $out }
     $file = Join-Path $PSScriptRoot "ApprovedGames.txt"
     $blocked = @("System", "Idle", "Registry", "smss", "csrss", "wininit", "winlogon",
         "services", "lsass", "svchost", "explorer", "dwm", "fontdrvhost", "sihost",
         "taskhostw", "conhost", "powershell", "pwsh", "cmd", "wscript", "cscript",
         "MsMpEng", "NisSrv", "SecurityHealthService", "HWiNFO64", "HWiNFO32",
         "remotehwinfo", "fipha")
-    $out = @()
     try {
         if (Test-Path -LiteralPath $file) {
             foreach ($line in (Get-Content -LiteralPath $file -ErrorAction Stop)) {
@@ -2286,12 +2288,16 @@ function Get-ApprovedGameProcesses {
     } catch {
         Write-Log "ApprovedGames.txt could not be read: $($_.Exception.Message)" "WARN"
     }
-    return ,@($out)
+    return $out
 }
 
 function Invoke-KillProcesses {
     Write-Log "=== STAGE 2: killing processes ===$(if ($DryRun) {' [DRYRUN]'})" "CRIT"
-    $approvedGames = @(Get-ApprovedGameProcesses)
+    # The extension is optional: whatever goes wrong with it must never stop
+    # Stage 2 (and with it the escalation to Stage 3), so fall back to the plain list.
+    $approvedGames = @()
+    try { $approvedGames = @(Get-ApprovedGameProcesses) }
+    catch { Write-Log "ApprovedGames.txt ignored: $($_.Exception.Message)" "WARN" }
     if ($approvedGames.Count -gt 0) {
         Write-Log "Kill list extended by ApprovedGames.txt: $($approvedGames -join ', ')"
     }
