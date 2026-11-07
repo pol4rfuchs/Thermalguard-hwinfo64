@@ -36,11 +36,19 @@
 #
 # Note: after -FixPermissions, editing the ThermalGuard scripts needs an
 # elevated editor / prompt.
+#
+# -GameScan additionally sets up the automatic game scan (a second, separate task
+# "HWiNFO Thermal Guard - Game scan" that runs Find-NewGames.ps1 at logon and every
+# 6 hours with normal user rights; it only fills the waiting list, nothing reaches
+# the kill list without your confirmation). Off by default. -GameScanNtfyUrl
+# https://ntfy.sh/topic sends a message when new games are found.
 
 param(
     [int]$RepeatMinutes = 5,
     [switch]$FixPermissions,
-    [switch]$Yes
+    [switch]$Yes,
+    [switch]$GameScan,
+    [string]$GameScanNtfyUrl = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -178,6 +186,26 @@ if ($RepeatMinutes -gt 0) {
 Write-Host "Test it now without logging off: " -NoNewline
 Write-Host "Start-ScheduledTask -TaskName '$TaskName'" -ForegroundColor Cyan
 Write-Host ""
+
+# --- Optional: automatic game scan (Find-NewGames.ps1) ----------------------------
+# Separate task, separate rights: it never needs administrator rights. A failure
+# here must not undo the guard task above, so it only warns.
+if ($GameScan) {
+    $FindScript = Join-Path $ScriptDir "Find-NewGames.ps1"
+    if (-not (Test-Path -LiteralPath $FindScript)) {
+        Write-Host "WARNING: -GameScan given, but Find-NewGames.ps1 is not in $ScriptDir. Game scan task NOT set up." -ForegroundColor Yellow
+    } else {
+        $scanArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $FindScript, "-InstallTask")
+        if ($GameScanNtfyUrl) { $scanArgs += @("-NtfyUrl", $GameScanNtfyUrl) }
+        try {
+            & powershell.exe @scanArgs
+            if ($LASTEXITCODE -ne 0) { Write-Host "WARNING: the game scan task could not be set up (exit code $LASTEXITCODE)." -ForegroundColor Yellow }
+        } catch {
+            Write-Host "WARNING: the game scan task could not be set up ($($_.Exception.Message))." -ForegroundColor Yellow
+        }
+    }
+    Write-Host ""
+}
 
 # --- Permission check / fix ------------------------------------------------------
 function Get-WritableByStandardUsers {
