@@ -24,6 +24,10 @@
 #   powershell -ExecutionPolicy Bypass -File .\Find-NewGames.ps1 -Remove Name # take one out (admin)
 #   powershell -ExecutionPolicy Bypass -File .\Find-NewGames.ps1 -InstallTask # run the scan automatically
 #   powershell -ExecutionPolicy Bypass -File .\Find-NewGames.ps1 -Reset       # clear the waiting list (then scan again)
+#   powershell -ExecutionPolicy Bypass -File .\Find-NewGames.ps1 -AddPath "F:\Gaming Librarys"
+#       remember a folder that holds one sub-folder per launcher/library (e.g.
+#       F:\Gaming Librarys\Battle.net\<game>, ...\SteamLibrary\steamapps\common\<game>,
+#       ...\Ubisoft Game Launcher\games\<game>). It is scanned on every run.
 #
 # -NtfyUrl https://ntfy.sh/topic  sends a message when new candidates are found.
 # -Yes  (with -Approve) approves everything without asking - use with care.
@@ -42,6 +46,7 @@ param(
     [string[]]$Remove = @(),
     [switch]$InstallTask,
     [switch]$Reset,
+    [string[]]$AddPath = @(),
     [string]$NtfyUrl = ""
 )
 
@@ -53,6 +58,7 @@ $ApprovedFile = Join-Path $ScriptDir "ApprovedGames.txt"
 $StateDir     = Join-Path $env:USERPROFILE "HWiNFO-ThermalGuard"
 $PendingFile  = Join-Path $StateDir "DetectedGames.json"
 $IgnoredFile  = Join-Path $StateDir "IgnoredGames.txt"
+$PathsFile    = Join-Path $StateDir "ScanPaths.txt"
 
 # Names that must never end up in the kill list (system, shell, security tools,
 # browsers/launchers that are not games). Compared case-insensitively.
@@ -69,7 +75,7 @@ $ProtectedNames = @(
 )
 
 # File names that are never the game itself (regex on the file name).
-$ExcludeFileRegex = '^(unins\d*|uninst\w*|setup\w*|install\w*|vc_?redist\S*|vcredist\S*|dxsetup|dxwebsetup|dotnet\S*|ndp\S*|oalinst|physx\S*|UnityCrashHandler\d*|crashpad\S*|crashreport\S*|crashsender\S*|bugreport\S*|BEService\S*|BEClient\S*|EasyAntiCheat\S*|EACLauncher|EOSBootstrapper|UplayWebCore|UbisoftGameLauncher\S*|upc|cleanup\S*|touchup|dwebp|7z\S*|ActivationUI|QuickSFV|redist\S*|DXSETUP|handler|launcherpatcher|CefSharp\S*|CrashHandler\S*|\S*crash_?reporter\S*|\S*installer\S*|\S*uninstall\S*|\S*editor\S*|worldbuilder\S*|converttogeo\S*|\S*launcher\S*|\S*server\S*|\S*benchmark\S*|\S*_BE|\S*diag\S*|3dmark\S*|dashboardx)\.exe$'
+$ExcludeFileRegex = '^(unins\d*|uninst\w*|setup\w*|install\w*|vc_?redist\S*|vcredist\S*|dxsetup|dxwebsetup|dotnet\S*|ndp\S*|oalinst|physx\S*|UnityCrashHandler\d*|crashpad\S*|crashreport\S*|crashsender\S*|bugreport\S*|BEService\S*|BEClient\S*|EasyAntiCheat\S*|EACLauncher|EOSBootstrapper|UplayWebCore|UbisoftGameLauncher\S*|upc|cleanup\S*|touchup|dwebp|7z\S*|ActivationUI|QuickSFV|redist\S*|DXSETUP|handler|launcherpatcher|CefSharp\S*|CrashHandler\S*|\S*crash_?reporter\S*|\S*installer\S*|\S*uninstall\S*|\S*editor\S*|worldbuilder\S*|converttogeo\S*|\S*launcher\S*|\S*server\S*|\S*benchmark\S*|\S*_BE|\S*diag\S*|3dmark\S*|dashboardx|utilities|logmate)\.exe$'
 
 # Folder names that are never searched (regex on the folder name).
 $ExcludeDirRegex = '^(_?CommonRedist|redist\S*|__Installer|DirectX|DotNet\S*|vcredist\S*|EasyAntiCheat\S*|BattlEye|Support|Tools|ThirdParty|Engine|Prerequisites|\.egstore|Launcher|Social Club|Steamworks Shared|SteamLinuxRuntime\S*|Proton\S*|Steam Controller Configs)$'
@@ -149,6 +155,18 @@ function Get-RegValue([string]$Key, [string]$Name) {
         $item = Get-ItemProperty -LiteralPath $Key -ErrorAction Stop
         return [string]$item.$Name
     } catch { return "" }
+}
+
+# Folders added with -AddPath: one sub-folder per launcher/library, games below it.
+function Get-ExtraPaths {
+    $out = @()
+    if (Test-Path -LiteralPath $PathsFile) {
+        foreach ($line in (Get-Content -LiteralPath $PathsFile -ErrorAction SilentlyContinue)) {
+            $l = $line.Trim()
+            if ($l -and -not $l.StartsWith('#')) { $out += $l }
+        }
+    }
+    return $out
 }
 
 function Get-GameSources {
@@ -233,16 +251,29 @@ function Get-GameSources {
         Add-Source $src "EA"       "$d\Program Files\Electronic Arts" $true
     }
 
-    # expand roots to game folders and de-duplicate by path
+    # User-defined library folders (-AddPath)
+    foreach ($ep in @(Get-ExtraPaths)) {
+        if (-not (Test-Path -LiteralPath $ep -PathType Container)) { continue }
+        foreach ($lib in (Get-ChildItem -LiteralPath $ep -Directory -ErrorAction SilentlyContinue)) {
+            $root = $lib.FullName
+            foreach ($sub in @("steamapps\common", "games")) {
+                $cand = Join-Path $lib.FullName $sub
+                if (Test-Path -LiteralPath $cand -PathType Container) { $root = $cand; break }
+            }
+            Add-Source $src $lib.Name $root $true
+        }
+    }
+
+    # expand roots to game folders and de-duplicate by path (first source wins)
     $games = @{}
     foreach ($s in $src) {
         if ($s.IsRoot) {
             foreach ($sub in (Get-ChildItem -LiteralPath $s.Path -Directory -ErrorAction SilentlyContinue)) {
-                if ($sub.Name -notmatch $ExcludeDirRegex -and $sub.Name -notmatch $ExcludeGameRegex) { $games[$sub.FullName.ToLowerInvariant()] = [pscustomobject]@{ Launcher = $s.Launcher; Path = $sub.FullName } }
+                if ($sub.Name -notmatch $ExcludeDirRegex -and $sub.Name -notmatch $ExcludeGameRegex) { $k = $sub.FullName.ToLowerInvariant(); if (-not $games.ContainsKey($k)) { $games[$k] = [pscustomobject]@{ Launcher = $s.Launcher; Path = $sub.FullName } } }
             }
         } else {
             $leaf = Split-Path -Leaf $s.Path
-            if ($leaf -notmatch $ExcludeDirRegex -and $leaf -notmatch $ExcludeGameRegex) { $games[$s.Path.ToLowerInvariant()] = [pscustomobject]@{ Launcher = $s.Launcher; Path = $s.Path } }
+            if ($leaf -notmatch $ExcludeDirRegex -and $leaf -notmatch $ExcludeGameRegex) { $k = $s.Path.ToLowerInvariant(); if (-not $games.ContainsKey($k)) { $games[$k] = [pscustomobject]@{ Launcher = $s.Launcher; Path = $s.Path } } }
         }
     }
     return @($games.Values)
@@ -393,6 +424,18 @@ function Invoke-RemoveFlow {
     Write-Info "Removed $removed entr$(if ($removed -eq 1) {'y'} else {'ies'})."
 }
 
+function Invoke-AddPathFlow {
+    if (-not (Test-Path $StateDir)) { New-Item -ItemType Directory -Path $StateDir -Force | Out-Null }
+    $have = @(Get-ExtraPaths)
+    foreach ($p in $AddPath) {
+        $full = $p.Trim().Trim('"').TrimEnd('\')
+        if (-not (Test-Path -LiteralPath $full -PathType Container)) { Write-Info "Not a folder, skipped: $full"; continue }
+        if ($have | Where-Object { $_ -ieq $full }) { Write-Info "Already saved: $full"; continue }
+        Add-Content -Path $PathsFile -Value $full -Encoding UTF8
+        Write-Info "Saved: $full  (scanned on every run; list: $PathsFile)"
+    }
+}
+
 function Invoke-ResetFlow {
     Save-PendingList @()
     Write-Info "Waiting list cleared ($PendingFile). Run the scan again to rebuild it."
@@ -402,6 +445,10 @@ function Show-State {
     Write-Info "Approved (kill list extension, $ApprovedFile):"
     $a = @(Get-NameList $ApprovedFile)
     if ($a.Count -eq 0) { Write-Info "  (none)" } else { foreach ($n in $a) { Write-Info "  $n" } }
+    Write-Info ""
+    Write-Info "Extra library folders ($PathsFile):"
+    $xp = @(Get-ExtraPaths)
+    if ($xp.Count -eq 0) { Write-Info "  (none)" } else { foreach ($n in $xp) { Write-Info "  $n" } }
     Write-Info ""
     Write-Info "Waiting for confirmation ($PendingFile):"
     $p = @(Get-PendingList)
@@ -431,5 +478,6 @@ if ($List)              { Show-State; exit 0 }
 if ($Remove.Count -gt 0){ Invoke-RemoveFlow; exit 0 }
 if ($InstallTask)       { Install-ScanTask; exit 0 }
 if ($Reset)             { Invoke-ResetFlow; exit 0 }
+if ($AddPath.Count -gt 0) { Invoke-AddPathFlow; exit 0 }
 if ($Approve)           { Invoke-ApproveFlow; exit 0 }
 Invoke-Scan

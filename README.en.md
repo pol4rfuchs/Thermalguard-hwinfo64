@@ -366,6 +366,7 @@ powershell -ExecutionPolicy Bypass -File .\Find-NewGames.ps1 -List         # sho
 powershell -ExecutionPolicy Bypass -File .\Find-NewGames.ps1 -Remove Name  # remove an entry (admin)
 powershell -ExecutionPolicy Bypass -File .\Find-NewGames.ps1 -InstallTask  # scan at logon + every 6 h
 powershell -ExecutionPolicy Bypass -File .\Find-NewGames.ps1 -Reset        # clear the waiting list (then scan again)
+powershell -ExecutionPolicy Bypass -File .\Find-NewGames.ps1 -AddPath "F:\Gaming Librarys"   # always scan your own library folder (one sub-folder per launcher)
 ```
 
 With `-NtfyUrl https://ntfy.sh/your-topic` (also with `-InstallTask`) you get a message when new candidates show up. `-Approve -Yes` adds everything without asking, which is not recommended. Detection is a heuristic: a find can be the wrong `.exe`, which is why confirmation is required.
