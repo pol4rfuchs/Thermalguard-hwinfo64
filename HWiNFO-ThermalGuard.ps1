@@ -67,7 +67,11 @@ if (-not [double]::IsNaN($SimulateTemp)) { $DryRun = [switch]$true }
 #
 # v1.56: no change to the guard itself. Version bump so the release ZIP ships the
 # corrected Find-NewGames.ps1 (waiting list is read correctly on Windows PowerShell 5.1).
-$ScriptVersion = "1.56"
+#
+# v1.57: no change to the guard itself. Install-ScheduledTask.ps1 -GameScan can set up
+# the automatic game scan (Find-NewGames.ps1) next to the guard task; a timing window
+# in tests/Run-Tests.ps1 was widened. See README.
+$ScriptVersion = "1.57"
 
 # --- TLS (GLOBAL, EARLY) -----------------------------------------------------
 # PowerShell 5.1 / .NET Framework does not always default to TLS 1.2, which
