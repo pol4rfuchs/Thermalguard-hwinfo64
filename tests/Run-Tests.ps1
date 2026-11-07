@@ -215,10 +215,13 @@ $Scenarios = @(
        Expect = @('GPU sensor index: sensorIndex 10 resolved', 'HEALTHY: first successful sensor poll', 'Security +\[(OK|WARN)\]')
        Forbid = @('threw', 'CRITICAL', 'Temps back to normal', 'FATAL') }
 
+    # Window: Stage 2 fires at the first poll after $Stage2Delay (6 s). One poll cycle here is about 5 s
+    # (TG_POLL 3 + 2 s sensor delay) and log times have 1 s resolution, so a loaded CI runner can land at
+    # 9-10 s. Max 11 = 6 s + one full cycle; a timer that counts polls instead of time would still land well outside it.
     @{ Name = 'stage-timing-compensates-for-slow-polls'; Duration = 26; Exit = 'self'; Env = @{ TG_POLL = '3' }
        Timeline = @(@{ At = 0; Sc = (NewSc -Set @(Rdg 'GPU Memory Junction Temperature' 101) -Delay 2) })
        Expect = @('stage 3: SHUTDOWN')
-       Timing = @(@{ From = 'GPU Memory Junction: CRITICAL value'; To = 'GPU Memory Junction: \d+s critical, stage 2'; Min = 5; Max = 8 }) }
+       Timing = @(@{ From = 'GPU Memory Junction: CRITICAL value'; To = 'GPU Memory Junction: \d+s critical, stage 2'; Min = 5; Max = 11 }) }
 
     @{ Name = 'fan-zero-rpm-cool-gpu-no-alarm'; Duration = 22
        Timeline = @(@{ At = 0; Sc = (NewSc -Set ($FansRun  + (Rdg 'GPU Temperature' 45))) }, @{ At = 3; Sc = (NewSc -Set ($FansStop + (Rdg 'GPU Temperature' 45))) })
