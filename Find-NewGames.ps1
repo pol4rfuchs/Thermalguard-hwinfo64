@@ -111,7 +111,12 @@ function Get-PendingList {
     try {
         $raw = Get-Content -Path $PendingFile -Raw -ErrorAction Stop
         if ([string]::IsNullOrWhiteSpace($raw)) { return @() }
-        return @($raw | ConvertFrom-Json)
+        # Windows PowerShell 5.1 returns a JSON array as ONE object (PowerShell 7 enumerates it),
+        # so flatten it: every entry must end up as its own item in both editions.
+        $data = ConvertFrom-Json -InputObject $raw
+        $flat = @()
+        foreach ($d in @($data)) { foreach ($e in @($d)) { if ($null -ne $e) { $flat += $e } } }
+        return $flat
     } catch {
         Write-Info "WARNING: $PendingFile unreadable ($($_.Exception.Message)) - starting with an empty waiting list."
         return @()
