@@ -369,6 +369,8 @@ powershell -ExecutionPolicy Bypass -File .\Find-NewGames.ps1 -Reset        # War
 powershell -ExecutionPolicy Bypass -File .\Find-NewGames.ps1 -AddPath "F:\Gaming Librarys"   # eigenen Sammelordner (ein Unterordner je Launcher) dauerhaft mitscannen
 ```
 
+Den Scan-Task kannst du auch gleich beim Einrichten des Autostarts mitinstallieren: `Install-ScheduledTask.ps1 -GameScan` (optional `-GameScanNtfyUrl https://ntfy.sh/dein-topic`). Er ist ein eigener Task mit normalen Benutzerrechten und standardmäßig aus.
+
 Mit `-NtfyUrl https://ntfy.sh/dein-topic` (auch bei `-InstallTask`) kommt eine Nachricht, sobald neue Kandidaten da sind. `-Approve -Yes` übernimmt alles ohne Nachfrage, das ist nicht empfohlen. Die Erkennung ist eine Heuristik: ein Fund kann auch eine falsche `.exe` sein, deshalb die Bestätigung.
 
 ### Pfade (optional)

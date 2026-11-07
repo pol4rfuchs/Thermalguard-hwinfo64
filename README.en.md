@@ -369,6 +369,8 @@ powershell -ExecutionPolicy Bypass -File .\Find-NewGames.ps1 -Reset        # cle
 powershell -ExecutionPolicy Bypass -File .\Find-NewGames.ps1 -AddPath "F:\Gaming Librarys"   # always scan your own library folder (one sub-folder per launcher)
 ```
 
+You can also install the scan task while setting up autostart: `Install-ScheduledTask.ps1 -GameScan` (optionally `-GameScanNtfyUrl https://ntfy.sh/your-topic`). It is a separate task with normal user rights and off by default.
+
 With `-NtfyUrl https://ntfy.sh/your-topic` (also with `-InstallTask`) you get a message when new candidates show up. `-Approve -Yes` adds everything without asking, which is not recommended. Detection is a heuristic: a find can be the wrong `.exe`, which is why confirmation is required.
 
 ### Paths (optional)
