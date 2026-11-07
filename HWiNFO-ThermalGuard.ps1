@@ -60,7 +60,11 @@ if (-not [double]::IsNaN($SimulateTemp)) { $DryRun = [switch]$true }
 # HWiNFO/RemoteHWInfo while a Stage 2/3 timer is running, -DryRun/-SimulateTemp
 # no longer start programs, install anything or touch the firewall/registry,
 # the HEALTHY line names the resolved CPU/GPU sensors, diagnostic block removed.
-$ScriptVersion = "1.54"
+#
+# v1.55: Stage 2 also kills the processes listed in ApprovedGames.txt (next to
+# this script), which Find-NewGames.ps1 fills after you confirm detected games.
+# The extra list is optional and can never stop Stage 2. See README.
+$ScriptVersion = "1.55"
 
 # --- TLS (GLOBAL, EARLY) -----------------------------------------------------
 # PowerShell 5.1 / .NET Framework does not always default to TLS 1.2, which
