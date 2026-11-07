@@ -2261,9 +2261,41 @@ function Find-GPULoad {
 
 # === STAGE 2 / STAGE 3 ========================================================
 
+# Extra kill-list entries the user confirmed with Find-NewGames.ps1 -Approve.
+# Read at every Stage 2, so a newly approved game counts without a restart. The
+# file sits next to this script (locked down by Install-ScheduledTask.ps1
+# -FixPermissions). Only plain process names are accepted, and system / shell /
+# security names are refused even if someone writes them into the file.
+function Get-ApprovedGameProcesses {
+    $file = Join-Path $PSScriptRoot "ApprovedGames.txt"
+    $blocked = @("System", "Idle", "Registry", "smss", "csrss", "wininit", "winlogon",
+        "services", "lsass", "svchost", "explorer", "dwm", "fontdrvhost", "sihost",
+        "taskhostw", "conhost", "powershell", "pwsh", "cmd", "wscript", "cscript",
+        "MsMpEng", "NisSrv", "SecurityHealthService", "HWiNFO64", "HWiNFO32",
+        "remotehwinfo", "fipha")
+    $out = @()
+    try {
+        if (Test-Path -LiteralPath $file) {
+            foreach ($line in (Get-Content -LiteralPath $file -ErrorAction Stop)) {
+                $n = ($line -replace '#.*$', '').Trim()
+                if ($n -notmatch '^[A-Za-z0-9_][A-Za-z0-9_\-\. ]{0,63}$') { continue }
+                if ($blocked -contains $n) { continue }
+                $out += $n
+            }
+        }
+    } catch {
+        Write-Log "ApprovedGames.txt could not be read: $($_.Exception.Message)" "WARN"
+    }
+    return ,@($out)
+}
+
 function Invoke-KillProcesses {
     Write-Log "=== STAGE 2: killing processes ===$(if ($DryRun) {' [DRYRUN]'})" "CRIT"
-    foreach ($proc in $KillProcesses) {
+    $approvedGames = @(Get-ApprovedGameProcesses)
+    if ($approvedGames.Count -gt 0) {
+        Write-Log "Kill list extended by ApprovedGames.txt: $($approvedGames -join ', ')"
+    }
+    foreach ($proc in @(@($KillProcesses) + $approvedGames | Select-Object -Unique)) {
         $running = Get-Process -Name $proc -ErrorAction SilentlyContinue
         if ($running) {
             if ($DryRun) {

@@ -88,6 +88,7 @@ C:\Tools\HWiNFO-ThermalGuard\
 ├── Install-ScheduledTask.ps1        ← richtet den Autostart-Task ein (einmalig, als Admin)
 ├── Approve-ThermalGuardUpdate.ps1   ← installiert ein bereitgestelltes Update (Update-Download)
 ├── Get-SensorDump.ps1               ← optional: Sensordaten für ein GitHub-Issue sammeln
+├── Find-NewGames.ps1                ← optional: erkennt neue Spiele, Übernahme per Bestätigung
 └── README.md                        ← Diese Dokumentation
 ```
 
@@ -349,6 +350,24 @@ Prozessnamen findest du im Task-Manager unter "Details" oder via:
 ```powershell
 Get-Process | Where-Object { $_.MainWindowTitle -ne "" }
 ```
+
+### Neue Spiele automatisch erkennen (optional)
+
+`Find-NewGames.ps1` findet neu installierte Spiele und schlägt sie für die Prozessliste vor. **Nichts wird ohne deine Bestätigung eingetragen**, denn ein Eintrag in der Liste bedeutet: in Stufe 2 wird der Prozess hart beendet.
+
+1. **Scan** (ohne Adminrechte): durchsucht die Installationsordner von Steam (inkl. weiterer Bibliotheken), Epic, GOG, Rockstar, Ubisoft, EA und Battle.net, wählt pro Spielordner die zwei größten `.exe` (ohne Installer, Crash-Handler, Anti-Cheat) und legt **neue** Funde auf eine Warteliste: `%USERPROFILE%\HWiNFO-ThermalGuard\DetectedGames.json`.
+2. **Bestätigen** (Administrator-PowerShell): pro Fund `y` (übernehmen), `n` (später nochmal fragen) oder `i` (nie wieder fragen).
+3. Übernommene Namen stehen in `ApprovedGames.txt` **neben dem Hauptscript**. Der Guard liest die Datei bei jedem Stufe 2 zusätzlich zu `$KillProcesses`, ein Neustart ist nicht nötig. Weil die Datei im Script-Ordner liegt, schützt sie `Install-ScheduledTask.ps1 -FixPermissions` mit. Systemprozesse (`explorer`, `svchost`, `lsass` ...) werden auch dann ignoriert, wenn sie in der Datei stehen.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Find-NewGames.ps1               # Scan
+powershell -ExecutionPolicy Bypass -File .\Find-NewGames.ps1 -Approve      # bestätigen (Admin)
+powershell -ExecutionPolicy Bypass -File .\Find-NewGames.ps1 -List         # Stand anzeigen
+powershell -ExecutionPolicy Bypass -File .\Find-NewGames.ps1 -Remove Name  # Eintrag entfernen (Admin)
+powershell -ExecutionPolicy Bypass -File .\Find-NewGames.ps1 -InstallTask  # Scan bei Anmeldung + alle 6 h
+```
+
+Mit `-NtfyUrl https://ntfy.sh/dein-topic` (auch bei `-InstallTask`) kommt eine Nachricht, sobald neue Kandidaten da sind. `-Approve -Yes` übernimmt alles ohne Nachfrage, das ist nicht empfohlen. Die Erkennung ist eine Heuristik: ein Fund kann auch eine falsche `.exe` sein, deshalb die Bestätigung.
 
 ### Pfade (optional)
 
